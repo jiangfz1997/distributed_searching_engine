@@ -1,0 +1,13 @@
+# 基础依赖 (为了能引用 search_engine.py 和 db_utils.py)
+redis
+psycopg2-binary
+numpy
+nltk
+mwparserfromhell
+pydantic
+
+# === 评估专用重型库 ===
+beir
+scipy
+scikit-learn
+# pytorch 等会自动被 beir 依赖拉取

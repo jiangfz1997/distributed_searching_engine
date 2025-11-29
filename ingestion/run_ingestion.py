@@ -1,110 +1,91 @@
 import os
 import xml.etree.ElementTree as ET
 import json
-import re
+import mwparserfromhell  # <--- 神器
 from tqdm import tqdm
 
-# ================= 路径配置 =================
-SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-PROJECT_ROOT = os.path.dirname(SCRIPT_DIR)
-XML_FILENAME = "simplewiki-latest-pages-articles.xml"
-RAW_FILE_PATH = os.path.join(PROJECT_ROOT, "data", "raw", XML_FILENAME)
-OUTPUT_FILE = os.path.join(PROJECT_ROOT, "data", "intermediate", "corpus.jsonl")
+# === 配置 ===
+# 确保这里路径对得上
+BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+XML_FILE = os.path.join(BASE_DIR, "data/raw/simplewiki-latest-pages-articles.xml")
+OUT_FILE = os.path.join(BASE_DIR, "data/intermediate/corpus.jsonl")
 
-
-# ===========================================
 
 def normalize_id(title):
     if not title: return ""
     return title.strip().replace(" ", "_")
 
 
-def clean_and_extract_links(wiki_text):
-    if not wiki_text: return "", []
-    out_links = []
-    # 匹配 [[Target|Label]] 或 [[Target]]
-    pattern = re.compile(r'\[\[([^|\]]+)(?:\|([^\]]+))?\]\]')
-
-    def replace_func(match):
-        target = match.group(1)
-        label = match.group(2) if match.group(2) else target
-        if ":" not in target:
-            out_links.append(normalize_id(target))
-        return label
-
-    text_step1 = pattern.sub(replace_func, wiki_text)
-    return text_step1, out_links
-
-
-def strip_tag_name(t):
-    """
-    辅助函数：去掉 {http://...} 这种前缀
-    """
-    if '}' in t:
-        return t.split('}', 1)[1]
-    return t
-
-
-def process_xml():
-    print(f"📂 读取文件: {RAW_FILE_PATH}")
-    if not os.path.exists(RAW_FILE_PATH):
-        print("❌ 文件不存在！请检查路径。")
+def process_wiki_dump():
+    print(f"🚀 Parsing XML: {XML_FILE}")
+    if not os.path.exists(XML_FILE):
+        print("❌ XML file not found!")
         return
 
-    print(f"🚀 开始处理 XML...")
-    os.makedirs(os.path.dirname(OUTPUT_FILE), exist_ok=True)
-
+    context = ET.iterparse(XML_FILE, events=("end",))
     count = 0
+    skipped = 0
 
-    with open(OUTPUT_FILE, "w", encoding="utf-8") as f_out:
-        # 使用 iterparse 流式读取
-        context = ET.iterparse(RAW_FILE_PATH, events=("end",))
-
+    with open(OUT_FILE, "w", encoding="utf-8") as f_out:
         for event, elem in context:
-            # 获取去除了命名空间的标签名
-            tag = strip_tag_name(elem.tag)
+            # 处理 XML 命名空间: {http://...}page -> page
+            tag = elem.tag.split("}")[-1]
 
             if tag == "page":
-                title = None
-                text = None
+                title = elem.find("{*}title").text if elem.find("{*}title") is not None else None
+                revision = elem.find("{*}revision")
+                text_node = revision.find("{*}text") if revision is not None else None
+                raw_text = text_node.text if text_node is not None else ""
 
-                # 遍历子节点查找 title 和 text
-                for child in elem:
-                    child_tag = strip_tag_name(child.tag)
-                    if child_tag == "title":
-                        title = child.text
-                    elif child_tag == "revision":
-                        for rev_child in child:
-                            if strip_tag_name(rev_child.tag) == "text":
-                                text = rev_child.text
-                                break
+                # 过滤重定向和非主命名空间
+                ns = elem.find("{*}ns")
+                ns_val = int(ns.text) if ns is not None else 0
 
-                if title and text:
-                    # 过滤特殊页面
-                    if ":" not in title:
-                        doc_id = normalize_id(title)
-                        clean_text, links = clean_and_extract_links(text)
+                # 必须是主条目(ns=0)，且不是 Redirect
+                if title and raw_text and ns_val == 0 and not raw_text.lower().startswith("#redirect"):
 
-                        doc = {
-                            "id": doc_id,
-                            "text": clean_text,
-                            "out_links": links
-                        }
-                        f_out.write(json.dumps(doc) + "\n")
-                        count += 1
+                    try:
+                        # === 核心魔法：使用 mwparserfromhell 解析 ===
+                        wikicode = mwparserfromhell.parse(raw_text)
 
-                        if count % 1000 == 0:
-                            print(f"✅ 已生成 {count} 条数据...", end="\r")
+                        # 1. 提取纯文本 (自动去掉 {{...}}, <ref>, '''...''')
+                        clean_text = wikicode.strip_code().strip()
 
-                # --- 修复点：标准库的内存清理方式 ---
-                # 只需 clear 即可，不要用 getprevious
+                        # 2. 提取出链 (PageRank 需要!)
+                        # filter_wikilinks() 会自动找到 [[Target]]
+                        links = []
+                        for link in wikicode.filter_wikilinks():
+                            # 获取链接目标 (e.g. "United States")
+                            target = str(link.title)
+                            # 过滤掉文件和分类链接
+                            if ":" not in target:
+                                links.append(normalize_id(target))
+
+                        # 写入结果
+                        if len(clean_text) > 50:  # 太短的丢掉
+                            doc = {
+                                "id": normalize_id(title),
+                                "text": clean_text,
+                                "out_links": links
+                            }
+                            f_out.write(json.dumps(doc) + "\n")
+                            count += 1
+                        else:
+                            skipped += 1
+
+                    except Exception as e:
+                        print(f"⚠️ Error parsing {title}: {e}")
+                        skipped += 1
+                else:
+                    skipped += 1
+
+                # 清理内存
                 elem.clear()
+                if count % 1000 == 0:
+                    print(f"✅ Processed {count} docs...", end='\r')
 
-            # 这里不需要 else 打印了，避免刷屏
-
-    print(f"\n✨ 处理完成！共生成 {count} 条数据。")
-    print(f"📁 结果保存在: {OUTPUT_FILE}")
+    print(f"\n✨ Done! Saved {count} docs to {OUT_FILE}")
 
 
 if __name__ == "__main__":
-    process_xml()
+    process_wiki_dump()

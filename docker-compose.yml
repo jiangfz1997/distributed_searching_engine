@@ -1,0 +1,125 @@
+version: '3.8'
+
+services:
+  # === 公共基础设施 ===
+  redis:
+    image: redis:alpine
+    container_name: se-redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data  # Redis 数据持久化
+    networks:
+      - search-net
+  postgres:
+    image: postgres:15-alpine
+    container_name: se-postgres
+    environment:
+      POSTGRES_USER: admin
+      POSTGRES_PASSWORD: password
+      POSTGRES_DB: search_engine
+    volumes:
+      - pg_data:/var/lib/postgresql/data # 数据持久化在 Docker 内部卷
+    ports:
+      - "5433:5432" # 暴露端口，方便你用 Navicat/DBeaver 连接查看
+    networks:
+      - search-net
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U admin -d search_engine"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+  # === 计算节点镜像 ===
+  # 这个服务本身不自动运行任务，它作为一个“基础模具”
+  # 我们用 docker-compose run 来启动它执行具体任务
+  compute-node:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: search-compute:v1
+    volumes:
+      - ./data:/app/data
+    networks:
+      - search-net
+    environment:
+      - REDIS_HOST=redis
+    # 保持容器存活，方便调试，或者设置为不自动启动
+    command: ["python", "--version"]
+
+  pr-controller:
+    image: search-compute:v1  # 复用同一个镜像
+    container_name: pr-controller
+    volumes:
+      - ./data:/app/data
+    environment:
+      - REDIS_HOST=redis
+      - PYTHONUNBUFFERED=1    # 保证日志实时输出
+    networks:
+      - search-net
+    depends_on:
+      - redis
+    # 启动时自动运行 Controller 代码
+    command: ["python", "compute/pagerank/controller.py"]
+
+  # === 4. PageRank Worker (工人) ===
+  pr-worker:
+    image: search-compute:v1  # 复用同一个镜像
+    # 不设置 container_name，因为我们要启动多个副本
+    volumes:
+      - ./data:/app/data
+    environment:
+      - REDIS_HOST=redis
+      - PYTHONUNBUFFERED=1
+    networks:
+      - search-net
+    depends_on:
+      - redis
+      - pr-controller
+    # 启动时自动运行 Worker 代码
+    command: ["python", "compute/pagerank/worker.py"]
+  backend:
+    build:
+      context: .
+      dockerfile: serving/Dockerfile
+    image: search-backend:v1
+    container_name: se-backend
+    ports:
+      - "8000:8000"       # 暴露给宿主机
+    volumes:
+      - ./data:/app/data  # 挂载数据 (只读 db 和 json)
+    networks:
+      - search-net
+    # 重启策略：挂了自动重启
+    restart: always
+
+  eval-node:
+    build:
+      context: ./evaluation
+      dockerfile: Dockerfile
+    image: search-eval:v1
+    container_name: evaluation
+    volumes:
+      - .:/app            # <--- 关键：挂载整个项目根目录到 /app
+      - ./data:/app/data
+
+    environment:
+        - REDIS_HOST=redis
+        - PG_HOST=postgres
+        - PG_USER=admin
+        - PG_PASS=password
+        - PG_DB=search_engine
+    networks:
+      - search-net
+    depends_on:
+      - postgres
+      - redis
+      # 不自动启动，只用于手动跑脚本
+    profiles: [ "tools" ]
+    command: [ "python", "--version" ]
+networks:
+  search-net:
+    driver: bridge
+
+volumes:
+  redis_data:
+  pg_data:
