@@ -1,15 +1,15 @@
 import redis
 import time
 import math
-import sys
+import sys,os,csv
 
 # === 配置 ===
 REDIS_HOST = "redis"
 TASK_BATCH_SIZE = 2000  # 每个任务包包含多少个节点
 MAX_ITERATIONS = 100  # 迭代次数
 DAMPING_FACTOR = 0.85
-CONVERGENCE_THRESHOLD = 0.00001 # 收敛阈值 (总误差小于此值即停止)
-
+CONVERGENCE_THRESHOLD = 1e-06 # 收敛阈值 (总误差小于此值即停止)
+LOG_FILE = "/app/log/output/pr_convergence.csv"
 
 def generate_tasks(r, total_nodes):
     """生成任务包：分批写入 Redis 并显示进度"""
@@ -74,6 +74,9 @@ def wait_for_tasks(r, total_tasks):
 
 
 def run_controller():
+    os.makedirs(os.path.dirname(LOG_FILE), exist_ok=True)
+    print(f"📝 Logging convergence data to {LOG_FILE}...")
+    print(f"CONVERGENCE_THRESHOLD = {CONVERGENCE_THRESHOLD}")
     r = redis.Redis(host=REDIS_HOST, port=6379, decode_responses=True)
     cleanup_state(r)
     # 检查图是否加载
@@ -83,6 +86,11 @@ def run_controller():
 
     total_nodes = int(r.get("sys:node_count"))
     print(f"🚦 Controller Started. Nodes: {total_nodes}")
+
+    with open(LOG_FILE, mode='w', newline='') as f:
+        writer = csv.writer(f)
+        # 写入表头
+        writer.writerow(['Round', 'Duration_Seconds', 'Diff_Value'])
 
     for round_id in range(1, MAX_ITERATIONS + 1):
         print(f"\n=== 🏁 ROUND {round_id} START ===")
@@ -139,7 +147,10 @@ def run_controller():
         total_diff = float(r.get("sys:convergence_diff") or 0.0)
         duration = time.time() - start_time
         print(f"    Round {round_id} Done. Time: {duration:.2f}s, Diff: {total_diff:.6f}")
-
+        with open(LOG_FILE, mode='a', newline='') as f:
+            writer = csv.writer(f)
+            # 这里的 diff 建议存高精度
+            writer.writerow([round_id, round(duration, 4), f"{total_diff:.10f}"])
         if total_diff < CONVERGENCE_THRESHOLD:
             print(f"✨ Converged at Round {round_id}! (Diff {total_diff} < {CONVERGENCE_THRESHOLD})")
             break

@@ -6,9 +6,10 @@ WORKDIR /app
 
 # 将根目录下的代码全部复制进容器
 # 这样容器里就有了 /app/compute/indexing/...
-COPY . /app/
+#COPY . /app/
+COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
-
+COPY . .
 # 设置 Python 路径，防止 ModuleNotFoundError
 ENV PYTHONPATH=/app
 

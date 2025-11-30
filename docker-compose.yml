@@ -38,7 +38,7 @@ services:
       dockerfile: Dockerfile
     image: search-compute:v1
     volumes:
-      - ./data:/app/data
+      - .:/app
     networks:
       - search-net
     environment:
@@ -50,7 +50,7 @@ services:
     image: search-compute:v1  # 复用同一个镜像
     container_name: pr-controller
     volumes:
-      - ./data:/app/data
+      - .:/app
     environment:
       - REDIS_HOST=redis
       - PYTHONUNBUFFERED=1    # 保证日志实时输出
@@ -66,7 +66,7 @@ services:
     image: search-compute:v1  # 复用同一个镜像
     # 不设置 container_name，因为我们要启动多个副本
     volumes:
-      - ./data:/app/data
+      - .:/app
     environment:
       - REDIS_HOST=redis
       - PYTHONUNBUFFERED=1
@@ -116,6 +116,18 @@ services:
       # 不自动启动，只用于手动跑脚本
     profiles: [ "tools" ]
     command: [ "python", "--version" ]
+
+  frontend:
+    build: ./frontend
+    image: search-frontend:v1
+    container_name: se-frontend
+    ports:
+      - "8501:8501"
+    networks:
+      - search-net
+    depends_on:
+      - backend
+    restart: always
 networks:
   search-net:
     driver: bridge
