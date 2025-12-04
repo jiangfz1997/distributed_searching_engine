@@ -4,12 +4,13 @@ from fastapi import FastAPI, Query
 from typing import List
 from pydantic import BaseModel
 from serving.search_engine import SearchEngine
-
+from serving.admin import router as admin_router
 # 1. 配置日志 (Docker 也能看到)
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 app = FastAPI(title="Distributed Search Engine")
+app.include_router(admin_router)
 
 # 初始化引擎
 # 注意：SearchEngine 内部已经有了重试机制，这里直接实例化即可

@@ -86,7 +86,9 @@ services:
     ports:
       - "8000:8000"       # 暴露给宿主机
     volumes:
-      - ./data:/app/data  # 挂载数据 (只读 db 和 json)
+      - .:/app
+      - ./data:/app/data
+      - /var/run/docker.sock:/var/run/docker.sock
     networks:
       - search-net
     # 重启策略：挂了自动重启
