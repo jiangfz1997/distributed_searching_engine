@@ -4,7 +4,7 @@ import glob
 import heapq
 import sys
 from itertools import groupby
-from psycopg2.extras import Json  # 用于处理 JSONB
+from psycopg2.extras import Json
 
 sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 from compute.db_utils import get_db_connection
@@ -79,7 +79,7 @@ def run_reducer_task(partition_id):
             cursor.executemany(sql, batch_data)
 
         conn.commit()
-        print(f"\n✅ [Reducer] Partition {partition_id} Done. ({count_terms} terms)")
+        print(f"\n✅ [Reducer] Partition {partition_id} Done. ({count_terms} terms)", flush=True)
 
     except Exception as e:
         if conn: conn.rollback()

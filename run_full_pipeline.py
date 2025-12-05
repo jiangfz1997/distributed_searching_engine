@@ -9,8 +9,8 @@ NUM_MAPPERS = 4
 NUM_PR_WORKERS = 4
 
 # 超时设置 (秒)
-TIMEOUT_MAPPER = 600  # 等待 Mapper 完成的最大时间
-TIMEOUT_PR = 600  # 等待 PageRank 完成的最大时间
+TIMEOUT_MAPPER = 1800  # 等待 Mapper 完成的最大时间
+TIMEOUT_PR = 1800  # 等待 PageRank 完成的最大时间
 
 
 def log(msg):
@@ -76,7 +76,7 @@ def main():
 
     # 重建镜像 (确保 NLTK, psycopg2 等依赖最新)
     log("Step 1.1: Building Images (ensure dependencies)")
-    run_cmd("docker-compose build", "Building Docker Images")
+    run_cmd("docker-compose build --no-cache", "Building Docker Images")
 
     # 启动基础设施
     run_cmd("docker-compose up -d redis postgres", "Starting Infrastructure")
@@ -100,7 +100,7 @@ def main():
     # ---------------------------------------------------------
     log("Step 2: Data Ingestion (XML -> JSONL)")
     # 假设你的 ingestion 脚本在 src/run_ingestion.py
-    run_cmd("docker-compose run --rm compute-node python src/run_ingestion.py", "Running Ingestion")
+    run_cmd("docker-compose run --rm compute-node python ingestion/run_ingestion_multi_process.py", "Running Ingestion")
 
     # ---------------------------------------------------------
     # 3. 倒排索引 (Indexing)
@@ -108,7 +108,10 @@ def main():
     log("Step 3: Distributed Indexing")
 
     # 3.1 清理中间文件
-    run_cmd("docker-compose run --rm compute-node rm -rf /app/data/temp_shuffle/*", "Cleaning temp files")
+    # run_cmd("docker-compose run --rm compute-node rm -rf /app/data/temp_shuffle/*", "Cleaning temp files")
+    cmd = 'docker-compose run --rm compute-node sh -c "rm -rf /app/data/temp_shuffle/*"'
+
+    run_cmd(cmd, "Cleaning temp files inside Docker")
 
     # 3.2 发布任务
     run_cmd("docker-compose run --rm compute-node python compute/indexing/controller.py --phase map",
@@ -119,7 +122,7 @@ def main():
     # 使用 scale 启动多个 mapper
     # 注意：mapper 必须有 idle 自动退出机制，否则这里会一直运行
     # 为了脚本能继续，我们使用 detached mode (-d)
-    subprocess.run(f"docker-compose up -d --scale compute-node={NUM_MAPPERS}", shell=True)
+    # subprocess.run(f"docker-compose up -d --scale compute-node={NUM_MAPPERS}", shell=True)
     # 这里的 compute-node 默认 command 是 tail -f，我们需要手动指定 command 运行 mapper
     # 修正：直接用 run -d 多次
     for i in range(NUM_MAPPERS):
@@ -158,8 +161,9 @@ def main():
         time.sleep(2)
 
     # 3.5 运行 Reducer (入库)
-    run_cmd("docker-compose run --rm compute-node python compute/indexing/reducer.py",
-            "Running Reducer (Insert to Postgres)")
+    # run_cmd("docker-compose run --rm compute-node python compute/indexing/controller.py --phase reduce", "Publishing Reduce Tasks")
+    # for _ in range(NUM_PR_WORKERS):
+    run_cmd("docker-compose run --rm compute-node python compute/indexing/reducer.py","Running Reducer (Insert to Postgres)")
 
     # ---------------------------------------------------------
     # 4. 图计算 (PageRank)
@@ -174,7 +178,7 @@ def main():
 
     # 4.3 启动集群
     print(f"   🚀 Starting PR Controller + {NUM_PR_WORKERS} Workers...")
-    subprocess.run(f"docker-compose up -d pr-controller --scale pr-worker={NUM_PR_WORKERS}", shell=True)
+    subprocess.run(f"docker-compose up -d --scale pr-worker={NUM_PR_WORKERS}", shell=True)
 
     # 4.4 等待收敛 (监控 Controller 退出)
     print("   ⏳ Waiting for PageRank convergence...")
@@ -212,6 +216,7 @@ def main():
     # ---------------------------------------------------------
     log("Step 6: Deploying Search Engine")
     run_cmd("docker-compose up -d backend", "Starting Backend Service")
+    run_cmd("docker-compose up -d frontend", "Starting Frontend Service")
 
     # ---------------------------------------------------------
     # 完成
@@ -220,6 +225,7 @@ def main():
     print("\n" + "=" * 60)
     print(f"🎉 PIPELINE COMPLETED in {total_time / 60:.2f} minutes!")
     print("👉 Search API: http://localhost:8000/docs")
+    print("👉 Frontend: http://localhost:8501")
     print("=" * 60)
 
 

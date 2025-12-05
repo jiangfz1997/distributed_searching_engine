@@ -7,6 +7,11 @@ WORKDIR /app
 # 将根目录下的代码全部复制进容器
 # 这样容器里就有了 /app/compute/indexing/...
 #COPY . /app/
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential \
+    libpq-dev
+
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 COPY . .

@@ -11,6 +11,28 @@ DAMPING_FACTOR = 0.85
 CONVERGENCE_THRESHOLD = 1e-06 # 收敛阈值 (总误差小于此值即停止)
 LOG_FILE = "/app/log/output/pr_convergence.csv"
 
+
+def verify_integrity(r, target_key, expected_count, round_id):
+    """
+    检查计算结果的节点数量是否与总节点数一致。
+    如果发现丢失节点，返回 False，并打印警告。
+    """
+    # 假设 pr:ranks:next 是 Hash 结构 (HSET)
+    # 如果你是用 Sorted Set (ZSET)，请改用 r.zcard(target_key)
+    actual_count = r.hlen(target_key)
+
+    if actual_count != expected_count:
+        missing = expected_count - actual_count
+        print(f"\n🚨 [CRITICAL ERROR] Integrity Check Failed in Round {round_id}!")
+        print(f"   Target Key: {target_key}")
+        print(f"   Expected:   {expected_count}")
+        print(f"   Actual:     {actual_count}")
+        print(f"   Missing:    {missing} nodes (Approx {missing / TASK_BATCH_SIZE:.1f} batches)")
+        return False
+
+    return True
+
+
 def generate_tasks(r, total_nodes):
     """生成任务包：分批写入 Redis 并显示进度"""
 
@@ -86,6 +108,10 @@ def run_controller():
 
     total_nodes = int(r.get("sys:node_count"))
     print(f"🚦 Controller Started. Nodes: {total_nodes}")
+    if r.exists("pr:ranks:current"):
+        if not verify_integrity(r, "pr:ranks:current", total_nodes, 0):
+            print("❌ Initial state is corrupted. Please reload the graph.")
+            sys.exit(1)
 
     with open(LOG_FILE, mode='w', newline='') as f:
         writer = csv.writer(f)
@@ -105,11 +131,12 @@ def run_controller():
         r.delete("pr:accumulated")  # 这一轮收到的信件箱
         r.delete("pr:dangling_sum")  # 悬挂节点总和
         r.set("sys:phase_ack", 0)
+        r.set("sys:signal", "SCATTER")
+
         # 2. 生成任务
         num_tasks = generate_tasks(r, total_nodes)
 
         # 3. 发送信号
-        r.set("sys:signal", "SCATTER")
 
         # 4. 等待完成
         wait_for_tasks(r, num_tasks)
@@ -135,35 +162,50 @@ def run_controller():
         # 1. 清理下一轮结果表
         r.delete("pr:ranks:next")
         r.set("sys:phase_ack", 0)
+        r.set("sys:signal", "COMPUTE")
+
+
         # 2. 再次生成同样的任务 (让 Worker 遍历所有节点应用公式)
         num_tasks = generate_tasks(r, total_nodes)
 
         # 3. 发送信号
-        r.set("sys:signal", "COMPUTE")
 
         # 4. 等待完成
         wait_for_tasks(r, num_tasks)
+
+        print(" -> 🕵️ Verifying round integrity...")
+        is_valid = verify_integrity(r, "pr:ranks:next", total_nodes, round_id)
+
+        if not is_valid:
+            print("🛑 STOPPING CONTROLLER due to data loss.")
+            print("   Please check Worker logs for Timeout/Connection errors.")
+
+            # 我们不进行 Swap，这样 pr:ranks:current 还是上一轮正确的状态
+            # 你可以修复 Worker 后重新运行 Controller，它会从上一轮继续
+            sys.exit(1)
+        else:
+            print("✅ Integrity Check Passed.")
         # ================= Check Convergence =================
-        total_diff = float(r.get("sys:convergence_diff") or 0.0)
-        duration = time.time() - start_time
-        print(f"    Round {round_id} Done. Time: {duration:.2f}s, Diff: {total_diff:.6f}")
-        with open(LOG_FILE, mode='a', newline='') as f:
-            writer = csv.writer(f)
-            # 这里的 diff 建议存高精度
-            writer.writerow([round_id, round(duration, 4), f"{total_diff:.10f}"])
-        if total_diff < CONVERGENCE_THRESHOLD:
-            print(f"✨ Converged at Round {round_id}! (Diff {total_diff} < {CONVERGENCE_THRESHOLD})")
-            break
-        # ==========================================
-        # SWAP (翻转)
-        # ==========================================
+            total_diff = float(r.get("sys:convergence_diff") or 0.0)
+            duration = time.time() - start_time
+            print(f"    Round {round_id} Done. Time: {duration:.2f}s, Diff: {total_diff:.6f}")
+            with open(LOG_FILE, mode='a', newline='') as f:
+                writer = csv.writer(f)
+                # 这里的 diff 建议存高精度
+                writer.writerow([round_id, round(duration, 4), f"{total_diff:.10f}"])
+            if total_diff < CONVERGENCE_THRESHOLD:
+                print(f"✨ Converged at Round {round_id}! (Diff {total_diff} < {CONVERGENCE_THRESHOLD})")
+                break
+            # ==========================================
+            # SWAP (翻转)
+            # ==========================================
 
-        print(" -> Swapping current/next...")
-        r.delete("pr:ranks:current")
-        r.rename("pr:ranks:next", "pr:ranks:current")
+            print(" -> Swapping current/next...")
+            r.delete("pr:ranks:current")
+            r.rename("pr:ranks:next", "pr:ranks:current")
 
-        duration = time.time() - start_time
-        print(f"✅ Round {round_id} Done in {duration:.2f}s")
+            duration = time.time() - start_time
+            print(f"✅ Round {round_id} Done in {duration:.2f}s")
 
     print("\n🎉 PageRank Completed.")
     r.set("sys:signal", "SHUTDOWN")

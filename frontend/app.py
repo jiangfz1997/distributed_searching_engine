@@ -1,3 +1,5 @@
+from cProfile import label
+
 import streamlit as st
 import requests
 import time
@@ -57,7 +59,7 @@ with st.sidebar:
 st.title("🔎 Wiki Search Engine")
 
 # 搜索框 (回车触发)
-query = st.text_input("", placeholder="Search for something (e.g. 'United States')...")
+query = st.text_input("Searching Keyword", placeholder="Search for something (e.g. 'United States')...", )
 
 # === 搜索逻辑 ===
 if query:

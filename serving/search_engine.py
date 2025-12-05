@@ -8,12 +8,10 @@ import os
 import logging
 from contextlib import contextmanager
 import sys
-
-# 确保能引入分词器
+from utils import timer
 sys.path.append("/app")
 from compute.utils.tokenizer import analyzer
 
-# 配置日志
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
@@ -30,6 +28,11 @@ class SearchEngine:
         self.alpha = 0.7
         self.beta = 0.3
 
+        self._initialize_database_conn_pool()
+        self._load_global_stats()
+        self._initialize_database_indexes()
+
+    def _initialize_database_conn_pool(self):
         print("🔌 Initializing PostgreSQL Connection Pool...", flush=True)
         import time
         max_retries = 10
@@ -40,14 +43,42 @@ class SearchEngine:
                     host=self.pg_host, user=self.pg_user,
                     password=self.pg_pass, dbname=self.pg_db
                 )
-                print("✅ DB Connection Pool created!", flush=True)
+                print("DB Connection Pool created!", flush=True)
                 break
             except Exception as e:
                 if i == max_retries - 1: raise e
-                print(f"⚠️ DB not ready yet. Retrying...", flush=True)
+                print(f"DB not ready yet. Retrying...", flush=True)
                 time.sleep(2)
 
-        self._load_global_stats()
+    def _initialize_database_indexes(self):
+        """
+        Create Indexes on inverted_index, metadata, pagerank
+        """
+        print("Checking database indexes...", flush=True)
+        try:
+            with self._get_conn() as conn:
+                with conn.cursor() as cur:
+
+                    cur.execute("""
+                        CREATE INDEX IF NOT EXISTS idx_inverted_term 
+                        ON inverted_index(term);
+                    """)
+
+                    cur.execute("""
+                        CREATE INDEX IF NOT EXISTS idx_metadata_doc_id 
+                        ON metadata(doc_id);
+                    """)
+
+                    cur.execute("""
+                        CREATE INDEX IF NOT EXISTS idx_pagerank_doc_id 
+                        ON pagerank(doc_id);
+                    """)
+
+                conn.commit()
+
+            print("Indexes checked/created successfully.", flush=True)
+        except Exception as e:
+            print(f"Warning: Failed to create indexes automatically: {e}", flush=True)
 
     @contextmanager
     def _get_conn(self):
@@ -61,7 +92,7 @@ class SearchEngine:
             self.pg_pool.putconn(conn)
 
     def _load_global_stats(self):
-        print("⚙️ Loading global stats...", flush=True)
+        print("Loading global stats...", flush=True)
         try:
             with self._get_conn() as conn:
                 with conn.cursor() as cur:
@@ -72,12 +103,13 @@ class SearchEngine:
                     cur.execute("SELECT count(*) FROM metadata")
                     row = cur.fetchone()
                     self.N = int(row[0]) if row else 0
-            print(f"   Stats loaded: N={self.N}, AvgDL={self.avgdl:.2f}", flush=True)
+            print(f" Stats loaded: N={self.N}, AvgDL={self.avgdl:.2f}", flush=True)
         except Exception as e:
             print(f"⚠️ Stats failed: {e}", flush=True)
             self.avgdl = 200.0;
             self.N = 100000
 
+    @timer
     def get_metadata_bulk(self, doc_ids):
         res = {}
         if not doc_ids: return res
@@ -93,7 +125,7 @@ class SearchEngine:
                     clean = clean_map[raw_id]
                     if clean in temp_data: res[raw_id] = temp_data[clean]
         return res
-
+    @timer
     def get_pagerank_bulk(self, doc_ids):
         res = {}
         if not doc_ids: return res
@@ -110,6 +142,7 @@ class SearchEngine:
                     if clean in temp_scores: res[raw_id] = temp_scores[clean]
         return res
 
+    @timer
     def get_snippets_bulk(self, doc_ids, query_tokens):
         snippets = {}
         if not doc_ids: return snippets
@@ -127,6 +160,7 @@ class SearchEngine:
                         snippets[raw_id] = self.make_snippet(temp_texts[clean], query_tokens)
         return snippets
 
+
     def calculate_bm25(self, tf, doc_length, doc_freq):
         val = (self.N - doc_freq + 0.5) / (doc_freq + 0.5) + 1
         if val <= 0: val = 1.00001
@@ -135,47 +169,79 @@ class SearchEngine:
         denominator = tf + self.k1 * (1 - self.b + self.b * (doc_length / self.avgdl))
         return idf * (numerator / denominator)
 
-    def search(self, query, topk=20):
-        print(f"🔍 Searching for: {query}", flush=True)
-        # 1. 使用 NLTK Analyzer 分词
-        tokens = analyzer.analyze(query)
-        # 去重
-        tokens = list(set(tokens))
-
-        if not tokens: return []
-        print(f"   Tokens: {tokens}", flush=True)
-
+    @timer
+    def _get_inverted_index(self, tokens):
         docs_tracker = {}
 
         with self._get_conn() as conn:
             with conn.cursor() as cur:
-                # === 核心修改：读取 JSONB ===
-                # postings 已经是 dict 类型: {"doc1": 5, "doc2": 1}
                 sql = "SELECT term, df, postings FROM inverted_index WHERE term IN %s"
                 cur.execute(sql, (tuple(tokens),))
                 rows = cur.fetchall()
-
                 for term, df, postings_dict in rows:
                     if not postings_dict: continue
 
-                    # 遍历 JSONB 字典
-                    # key=doc_id, value=tf
                     count = 0
                     for doc_id, tf in postings_dict.items():
                         count += 1
-                        # 熔断
                         if count > 20000: break
 
                         if doc_id not in docs_tracker:
                             docs_tracker[doc_id] = {'matches': []}
 
-                        # 记录真实的 TF 和 DF
                         docs_tracker[doc_id]['matches'].append({
                             'term': term,
-                            'tf': tf,  # <--- 使用真实的词频
+                            'tf': tf,
                             'df': df
                         })
+        return docs_tracker
 
+    def search(self, query, topk=20):
+        print(f"🔍 Searching for: {query}", flush=True)
+
+        if self.N == 0 or self.avgdl == 0.0:
+            print(f"Detected self.N == {self.N}, self.avgdl == {self.avgdl}, attempting to reload stats...", flush=True)
+            self._load_global_stats()
+
+            # 如果重试后还是 0，那就没办法了，说明库真的是空的
+        if self.N == 0:
+            print("❌ Error: Metadata table is empty!", flush=True)
+            return []
+
+
+        # tokenize query
+        tokens = analyzer.analyze(query)
+        tokens = list(set(tokens))
+
+        if not tokens: return []
+        print(f"   Tokens: {tokens}", flush=True)
+
+        # docs_tracker = {}
+        #
+        # with self._get_conn() as conn:
+        #     with conn.cursor() as cur:
+        #
+        #         sql = "SELECT term, df, postings FROM inverted_index WHERE term IN %s"
+        #         cur.execute(sql, (tuple(tokens),))
+        #         rows = cur.fetchall()
+        #
+        #         for term, df, postings_dict in rows:
+        #             if not postings_dict: continue
+        #
+        #             count = 0
+        #             for doc_id, tf in postings_dict.items():
+        #                 count += 1
+        #                 if count > 20000: break
+        #
+        #                 if doc_id not in docs_tracker:
+        #                     docs_tracker[doc_id] = {'matches': []}
+        #
+        #                 docs_tracker[doc_id]['matches'].append({
+        #                     'term': term,
+        #                     'tf': tf,
+        #                     'df': df
+        #                 })
+        docs_tracker = self._get_inverted_index(tokens)
         candidate_ids = list(docs_tracker.keys())
         if not candidate_ids: return []
 

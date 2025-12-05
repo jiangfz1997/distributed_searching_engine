@@ -2,17 +2,37 @@ import redis
 import json
 import time
 import os
-
+import random
 # === 配置 ===
 REDIS_HOST = "redis"
 DAMPING_FACTOR = 0.85
+
+
+def retry_execute(pipe, max_retries=3, backoff=1):
+    """
+    尝试执行 Pipeline，如果遇到连接错误或超时则重试。
+    """
+    for attempt in range(max_retries):
+        try:
+            return pipe.execute()
+        except (redis.ConnectionError, redis.TimeoutError) as e:
+            if attempt == max_retries - 1:
+                print(f"❌ Pipeline failed after {max_retries} attempts: {e}")
+                raise e  # 抛出异常，让 Worker 崩溃/重启，绝对不能吞掉异常！
+
+            sleep_time = backoff * (2 ** attempt)  # 指数退避: 1s, 2s, 4s
+            print(f"⚠️ Pipeline write failed ({e}), retrying in {sleep_time}s...")
+            time.sleep(sleep_time)
+            # 注意：Pipeline 对象在 execute 失败后通常保持原样，可以直接再次 execute
+    return None
 
 
 def run_worker():
     r = redis.Redis(host=REDIS_HOST, port=6379, decode_responses=True)
     worker_pid = os.getpid()
     print(f"👷 Worker {worker_pid} Ready. Waiting for signals...")
-
+    start_delay = random.uniform(0, 2)
+    time.sleep(start_delay)
     while True:
         # 1. 获取当前信号
         signal = r.get("sys:signal")
@@ -53,7 +73,14 @@ def run_worker():
                 do_compute(r, node_ids)
             r.incr("sys:phase_ack")
         except Exception as e:
-            print(f"❌ Error processing task: {e}")
+            print(f"❌ Error processing task {raw_task}: {e}")
+
+            # 🔥🔥🔥 核心修复：把任务塞回队列头，让别人（或者自己等会儿）再做一次
+            print(f"♻️ Retrying task {raw_task}...")
+            r.lpush("queue:pr:tasks", raw_task)
+
+            # 稍微睡一下，避开当前的故障风头
+            time.sleep(1)
             # 生产环境应将任务塞回队列
 
 
@@ -103,7 +130,7 @@ def do_scatter(r, nodes):
     if dangling_sum_local > 0:
         write_pipe.hincrbyfloat("pr:dangling_sum", "total", dangling_sum_local)
 
-    write_pipe.execute()
+    retry_execute(write_pipe)
     print(f"Scatter done for nodes. Dangling Sum Local: {dangling_sum_local}")
 
 def do_compute(r, nodes):
@@ -135,7 +162,7 @@ def do_compute(r, nodes):
         local_diff_sum += abs(new_score - old_score)
 
     # 提交新分数
-    write_pipe.execute()
+    retry_execute(write_pipe)
 
     # 提交误差统计 (用于 Controller 判断是否提前收敛)
     if local_diff_sum > 0:

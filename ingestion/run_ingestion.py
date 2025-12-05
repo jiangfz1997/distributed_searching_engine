@@ -1,11 +1,9 @@
 import os
 import xml.etree.ElementTree as ET
 import json
-import mwparserfromhell  # <--- 神器
+import mwparserfromhell
 from tqdm import tqdm
 
-# === 配置 ===
-# 确保这里路径对得上
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 XML_FILE = os.path.join(BASE_DIR, "data/raw/simplewiki-latest-pages-articles.xml")
 OUT_FILE = os.path.join(BASE_DIR, "data/intermediate/corpus.jsonl")
@@ -82,7 +80,7 @@ def process_wiki_dump():
                 # 清理内存
                 elem.clear()
                 if count % 1000 == 0:
-                    print(f"✅ Processed {count} docs...", end='\r')
+                    print(f"✅ Processed {count} docs...", end='\r', flush=True)
 
     print(f"\n✨ Done! Saved {count} docs to {OUT_FILE}")
 
