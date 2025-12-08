@@ -9,6 +9,9 @@ import logging
 from contextlib import contextmanager
 import sys
 from utils import timer
+from sentence_transformers import SentenceTransformer, util
+import numpy as np
+
 sys.path.append("/app")
 from compute.utils.tokenizer import analyzer
 
@@ -27,6 +30,19 @@ class SearchEngine:
         self.b = 0.75
         self.alpha = 0.7
         self.beta = 0.3
+
+        # ====== 语义重排参数（semantic re-ranking）======
+        self.enable_semantic = True  # 想临时关掉就改成 False
+        self.semantic_topk = 50  # 对前 50 个候选做语义重排
+        self.semantic_lambda = 0.6  # lexical 权重 (BM25+PR)
+        # (1 - lambda) = 0.3 给 semantic similarity
+
+        if self.enable_semantic:
+            print("🔧 Loading semantic model (all-MiniLM-L6-v2)...", flush=True)
+            self.semantic_model = SentenceTransformer("sentence-transformers/all-MiniLM-L6-v2")
+            print("✅ Semantic model loaded.", flush=True)
+        else:
+            self.semantic_model = None
 
         self._initialize_database_conn_pool()
         self._load_global_stats()
@@ -196,21 +212,20 @@ class SearchEngine:
                         })
         return docs_tracker
 
-    def search(self, query, topk=20):
-        print(f"🔍 Searching for: {query}", flush=True)
+    def search(self, query, topk=20, pagerank=True, use_semantics=False, alpha=None, beta=None):
+        print(f"🔍 Searching for: {query}, use page rank: {pagerank}, use semantics: {use_semantics}, alpha:{alpha}, beta:{beta}", flush=True)
 
         if self.N == 0 or self.avgdl == 0.0:
             print(f"Detected self.N == {self.N}, self.avgdl == {self.avgdl}, attempting to reload stats...", flush=True)
             self._load_global_stats()
 
-            # 如果重试后还是 0，那就没办法了，说明库真的是空的
         if self.N == 0:
-            print("❌ Error: Metadata table is empty!", flush=True)
+            print("Error: Metadata table is empty!", flush=True)
             return []
 
 
         # tokenize query
-        tokens = analyzer.analyze(query)
+        tokens = analyzer.analyze(query, for_query=True)
         tokens = list(set(tokens))
 
         if not tokens: return []
@@ -258,10 +273,16 @@ class SearchEngine:
             for match in data['matches']:
                 bm25_score += self.calculate_bm25(match['tf'], doc_len, match['df'])
 
-            pr_score = pr_scores.get(doc_id, 0.0)
-            normalized_pr = math.log(1 + pr_score * 100000)
+            if pagerank:
+                pr_score = pr_scores.get(doc_id, 0.0)
+                normalized_pr = math.log(1 + pr_score * 100000)
+                if alpha is None: alpha = self.alpha
+                if beta is None: beta = self.beta
+                final_score = (alpha * bm25_score) + (beta * normalized_pr)
+            else:
+                normalized_pr = 0.0
+                final_score = bm25_score
 
-            final_score = (self.alpha * bm25_score) + (self.beta * normalized_pr)
             clean_id = doc_id.replace("_", " ").lower()
             query_lower = query.lower()
 
@@ -280,6 +301,9 @@ class SearchEngine:
             })
 
         scored_results.sort(key=lambda x: x['score'], reverse=True)
+        if use_semantics and self.semantic_model is not None and scored_results:
+            print("   Performing semantic re-ranking...", flush=True)
+            scored_results = self.semantic_rerank(query, scored_results, tokens)
         top_results = scored_results[:topk]
 
         print("   Generating snippets...", flush=True)
@@ -300,52 +324,139 @@ class SearchEngine:
 
         return final_list
 
+    def semantic_rerank(self, query, scored_results, tokens):
+        # ====== 二阶段语义重排 (semantic re-ranking) ======
+        if self.semantic_model is not None and scored_results:
+            # 只对前 semantic_topk 个候选做语义打分
+            cand_results = scored_results[:self.semantic_topk]
+            cand_ids = [r["doc_id"] for r in cand_results]
+            print(f"Cand_ids for semantic re-rank: {cand_ids}", flush=True)
+            # 先拿一遍 snippet，既用于展示，也可以作为语义模型输入
+            print("   [Semantic] Preparing texts for re-ranking...", flush=True)
+            # snippets_map = self.get_snippets_bulk(cand_ids, tokens)
+            raw_text_map = self.get_raw_text_sample_bulk(cand_ids, limit=300)
+            # 构建语义模型输入：这里用 snippet，如果没有就用 doc_id 兜底
+            doc_texts = []
+            valid_items = []
+
+            for item in cand_results:
+                did = item["doc_id"]
+                content = raw_text_map.get(did, "")
+
+                # 构造语义输入：Title + Content
+                # ID: "Steve_Jobs" -> Title: "Steve Jobs"
+                title = did.replace("_", " ")
+
+                # 组合文本 (Transformer 模型通常对开头的文本权重较高)
+                semantic_input = f"{title}. {content}"
+
+                doc_texts.append(semantic_input)
+                valid_items.append(item)
+
+            if doc_texts:
+                # 1) 编码 query（句向量，sentence embedding）
+                query_emb = self.semantic_model.encode(
+                    query,
+                    convert_to_tensor=True,
+                    normalize_embeddings=True
+                )
+                # 2) 编码候选文档文本
+                doc_embs = self.semantic_model.encode(
+                    doc_texts,
+                    convert_to_tensor=True,
+                    normalize_embeddings=True
+                )
+                # 3) 计算余弦相似度 (cosine similarity)
+                cos_scores = util.cos_sim(query_emb, doc_embs)[0].cpu().numpy()  # shape: [num_docs]
+
+                # 4) 分数归一化：把 lexical 和 semantic 都映射到 [0,1]
+                max_lex = max(item["score"] for item in valid_items) or 1.0
+                for item, sem in zip(valid_items, cos_scores):
+                    lex_norm = item["score"] / max_lex  # lexical ∈ [0,1]
+                    sem_norm = (float(sem) + 1.0) / 2.0  # cosine ∈ [-1,1] → [0,1]
+                    combined = (
+                            self.semantic_lambda * lex_norm +
+                            (1.0 - self.semantic_lambda) * sem_norm
+                    )
+                    item["combined_score"] = combined
+
+                # 用 combined_score 重排前 semantic_topk 个候选
+                valid_items.sort(key=lambda x: x["combined_score"], reverse=True)
+                # 之后继续下游流程时，就用 combined score 的顺序 + 原先的 snippet
+
+                # 把重排后的候选放回前面，后面的长尾候选保持原顺序
+                scored_results = valid_items + scored_results[self.semantic_topk:]
+            else:
+                snippets_for_final = None
+        else:
+            snippets_for_final = None
+        # ====== 语义重排结束 ======
+        return scored_results
+        # 截取最终要返回给用户的 topk
+
+    def get_raw_text_sample_bulk(self, doc_ids, limit=300):
+        """批量获取文档原始内容的前 limit 个字符"""
+        res = {}
+        if not doc_ids: return res
+
+        clean_map = {did: did.lstrip('_') for did in doc_ids}
+        clean_ids = list(set(clean_map.values()))
+
+        with self._get_conn() as conn:
+            with conn.cursor(cursor_factory=RealDictCursor) as cur:
+                # 这里的 substring 是数据库层面的截取，节省网络 IO
+                sql = "SELECT doc_id, substr(text, 1, %s) as sample FROM metadata WHERE doc_id IN %s"
+                cur.execute(sql, (limit, tuple(clean_ids)))
+
+                temp_data = {row['doc_id']: row['sample'] for row in cur.fetchall()}
+
+                for raw_id in doc_ids:
+                    clean = clean_map[raw_id]
+                    if clean in temp_data:
+                        res[raw_id] = temp_data[clean]
+        return res
+
     def make_snippet(self, text, query_tokens, window_size=150):
         """
-        生成 Snippet：基于 Tokenizer 匹配，支持 Stemming，高亮最佳片段。
+        生成 Snippet：使用与 analyzer 相同的 spaCy 分词和 lemma，
+        在原文中找到第一个命中的 query token，截取一个 window。
         """
-        if not text: return "No content available."
+        if not text:
+            return "No content available."
 
-        # 1. 对原文进行分词，并记录每个词的 (start, end) 位置
-        # 使用 NLTK 风格的正则，但我们需要保留位置信息
-        # finditer 返回迭代器，包含 match object (span)
-        word_iter = re.finditer(r'\b[a-zA-Z]{2,}\b', text)
+        # 确保 query_tokens 是 set，查找更快
+        qset = set(query_tokens)
+
+        # 使用同一个 spaCy nlp 做分词和 lemma
+        # analyzer 是 compute.utils.tokenizer 里的 TextAnalyzer 实例
+        doc = analyzer.nlp(text)
 
         best_span = None
 
-        # 2. 遍历原文单词，进行 Stemming 匹配
-        for match in word_iter:
-            raw_word = match.group()
-            # 这里的 stemmed_word 应该和 analyzer.analyze 的逻辑一致
-            # 为了性能，我们手动调一下 stemmer，不再调 analyzer (因为 analyzer 会去停用词)
-            # 我们希望即使是停用词也能保留位置
-            from nltk.stem import SnowballStemmer
-            stemmer = SnowballStemmer("english")
-            stemmed_word = stemmer.stem(raw_word.lower())
+        for token in doc:
+            if token.is_space or token.is_punct:
+                continue
 
-            if stemmed_word in query_tokens:
-                # 找到匹配！
-                start, end = match.span()
+            lemma = token.lemma_.lower()
+            raw_lower = token.text.lower()
 
-                # 3. 确定窗口范围
-                # 尝试以该词为中心
+            # 只要 lemma 或原词在 query token 中，就认为命中
+            if lemma in qset or raw_lower in qset:
+                start = token.idx
+                end = token.idx + len(token.text)
+
                 snippet_start = max(0, start - window_size // 2)
                 snippet_end = min(len(text), end + window_size // 2)
 
-                # 稍微调整边界，避免截断单词 (可选优化，这里简单截断)
                 best_span = (snippet_start, snippet_end)
-                break  # 找到第一个匹配就返回 (简单策略)
-                # 进阶策略：继续找，看哪个窗口包含的 query_tokens 最多 (Dense Window)
+                break
 
-        # 4. 生成结果
         if best_span:
             s, e = best_span
-            snippet = text[s:e].replace('\n', ' ')
-            # 如果不是从头开始，加省略号
+            snippet = text[s:e].replace("\n", " ")
             prefix = "..." if s > 0 else ""
             suffix = "..." if e < len(text) else ""
             return f"{prefix}{snippet}{suffix}"
         else:
-            # 没找到匹配词 (可能是停用词匹配，或者 query tokens 被过滤没了)
-            # 返回开头一段
-            return text[:window_size] + "..."
+            # 没找到匹配，返回开头一段
+            return text[:window_size].replace("\n", " ") + "..."

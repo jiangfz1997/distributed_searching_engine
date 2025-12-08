@@ -53,22 +53,43 @@ st.markdown("""
 with st.sidebar:
     st.header("⚙️ Search Settings")
     top_k = st.slider("Max Results", 5, 50, 10)
+
+    bm25_weight = st.slider("bm25 weight", 0.0, 1.0, 0.70)
+    pagerank_weight = st.slider("PageRank Weight", 0.0, 1.0, 0.30)
+
+    enable_pagerank = st.checkbox("Use PageRank", value=True)
+    enable_sementics = st.checkbox("Use Semantic Search", value=False)
     st.info("Backend: FastAPI + PostgreSQL\nAlgorithm: BM25 + PageRank")
 
 # === 主界面 ===
 st.title("🔎 Wiki Search Engine")
 
 # 搜索框 (回车触发)
-query = st.text_input("Searching Keyword", placeholder="Search for something (e.g. 'United States')...", )
+col1, col2 = st.columns([4, 1])
+
+with col1:
+    query = st.text_input(
+        "Searching Keyword",
+        placeholder="Search for something (e.g. 'United States')..."
+    )
+
+with col2:
+    run_search = st.button("Search")   # 点击按钮触发搜索
 
 # === 搜索逻辑 ===
-if query:
+if run_search and query:
     start_time = time.time()
     try:
         # 发送请求给 Backend
         response = requests.get(
             f"{BACKEND_URL}/search",
-            params={"q": query, "limit": top_k},
+            params={"q": query,
+                    "limit": top_k,
+                    "pagerank": "true" if enable_pagerank else "false",
+                    "semantics": "true" if enable_sementics else "false",
+                    "alpha": bm25_weight,
+                    "beta": pagerank_weight
+                    },
             timeout=5
         )
 

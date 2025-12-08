@@ -7,3 +7,5 @@ nltk
 numpy
 redis
 docker
+sentence-transformers
+spacy

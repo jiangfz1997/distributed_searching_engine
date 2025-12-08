@@ -1,7 +1,10 @@
 FROM python:3.9-slim
 
 WORKDIR /app
-
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential \
+    gcc \
+    && rm -rf /var/lib/apt/lists/*
 # 1. 安装依赖
 # 注意路径变了：现在是相对于根目录
 COPY serving/requirements.txt .

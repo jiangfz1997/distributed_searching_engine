@@ -1,0 +1,149 @@
+[
+  {
+    "query": "albert einstein",
+    "relevant": {
+      "Albert_Einstein": 3
+    }
+  },
+  {
+    "query": "photosynthesis",
+    "relevant": {
+      "Photosynthesis": 3,
+      "Chlorophyll": 1
+    }
+  },
+  {
+    "query": "roman empire",
+    "relevant": {
+      "Roman_Empire": 3,
+      "Ancient_Rome": 2
+    }
+  },
+  {
+    "query": "earthquake",
+    "relevant": {
+      "Earthquake": 3,
+      "Seismic_wave": 1
+    }
+  },
+  {
+    "query": "python programming",
+    "relevant": {
+      "Python_(programming_language)": 3,
+      "Programming_language": 1
+    }
+  },
+
+  {
+    "query": "who discovered electricity",
+    "relevant": {
+      "Benjamin_Franklin": 3,
+      "Electricity": 2
+    }
+  },
+  {
+    "query": "when did world war 2 end",
+    "relevant": {
+      "World_War_II": 3,
+      "Allies_of_World_War_II": 1
+    }
+  },
+  {
+    "query": "what is the capital of france",
+    "relevant": {
+      "Paris": 3,
+      "France": 1
+    }
+  },
+  {
+    "query": "what causes global warming",
+    "relevant": {
+      "Global_warming": 3,
+      "Greenhouse_effect": 2,
+      "Climate_change": 1
+    }
+  },
+  {
+    "query": "symptoms of malaria",
+    "relevant": {
+      "Malaria": 3,
+      "Infectious_disease": 1
+    }
+  },
+
+  {
+    "query": "causes of the american civil war",
+    "relevant": {
+      "American_Civil_War": 3,
+      "Slavery": 2,
+      "Confederate_States_of_America": 1
+    }
+  },
+  {
+    "query": "basic machine learning concepts",
+    "relevant": {
+      "Machine_learning": 3,
+      "Artificial_intelligence": 2,
+      "Supervised_learning": 1
+    }
+  },
+  {
+    "query": "renewable energy sources",
+    "relevant": {
+      "Renewable_energy": 3,
+      "Solar_power": 2,
+      "Wind_power": 1
+    }
+  },
+  {
+    "query": "history of the internet",
+    "relevant": {
+      "Internet": 3,
+      "ARPANET": 2
+    }
+  },
+  {
+    "query": "volcano eruptions",
+    "relevant": {
+      "Volcano": 3,
+      "Volcanic_eruptions": 2
+    }
+  },
+
+  {
+    "query": "how climate change affects oceans",
+    "relevant": {
+      "Climate_change": 3,
+      "Ocean": 2,
+      "Global_warming": 1
+    }
+  },
+  {
+    "query": "how does the human brain work",
+    "relevant": {
+      "Brain": 3,
+      "Nervous_system": 2
+    }
+  },
+  {
+    "query": "why do we sleep",
+    "relevant": {
+      "Sleep": 3,
+      "Circadian_rhythm": 2
+    }
+  },
+  {
+    "query": "how does the stock market work",
+    "relevant": {
+      "Stock_market": 3,
+      "Economics": 1
+    }
+  },
+  {
+    "query": "causes of depression",
+    "relevant": {
+      "Depression_(mood)": 3,
+      "Mental_health": 2
+    }
+  }
+]

@@ -114,8 +114,8 @@ def main():
     run_cmd(cmd, "Cleaning temp files inside Docker")
 
     # 3.2 发布任务
-    run_cmd("docker-compose run --rm compute-node python compute/indexing/controller.py --phase map",
-            "Publishing Map Tasks")
+    run_cmd("docker-compose run --rm compute-node python compute/indexing/controller.py --phase all",
+            "Publishing Map&Reduce Tasks")
 
     # 3.3 启动 Mapper 集群
     print(f"   🚀 Launching {NUM_MAPPERS} Mappers...")
@@ -160,11 +160,44 @@ def main():
         print(f"      Remaining Tasks: {queue_len} | Processing: {proc_len}   ", end='\r')
         time.sleep(2)
 
-    # 3.5 运行 Reducer (入库)
-    # run_cmd("docker-compose run --rm compute-node python compute/indexing/controller.py --phase reduce", "Publishing Reduce Tasks")
-    # for _ in range(NUM_PR_WORKERS):
-    run_cmd("docker-compose run --rm compute-node python compute/indexing/reducer.py","Running Reducer (Insert to Postgres)")
+    print(f"   🚀 Launching {NUM_MAPPERS} Reducers in parallel...")
 
+    for i in range(NUM_MAPPERS):
+        # 注意加上 -d (Detached)，让它在后台跑，不要阻塞 Python 脚本
+        # 这里不需要 run_cmd，直接用 subprocess 调用
+        cmd = "docker-compose run -d compute-node python compute/indexing/reducer.py"
+        subprocess.run(cmd, shell=True, check=True)
+
+    # 5.3 进入监控循环 (等待任务做完)
+    print("   ⏳ Waiting for Reducers to finish...")
+    wait_start = time.time()
+
+    while True:
+        # 通过 Redis 检查任务是否做完
+        # 检查 'pending' 队列
+        res_q = subprocess.run('docker-compose exec redis redis-cli LLEN queue:indexing:reducer', shell=True,
+                               capture_output=True, text=True)
+        # 检查 'processing' 队列
+        res_p = subprocess.run('docker-compose exec redis redis-cli LLEN queue:indexing:reducer:processing', shell=True,
+                               capture_output=True, text=True)
+
+        try:
+            q_len = int(res_q.stdout.strip())
+            p_len = int(res_p.stdout.strip())
+        except ValueError:
+            # Redis 可能还没响应，暂时忽略
+            q_len = 999
+            p_len = 999
+
+        # 如果两个队列都空了，说明做完了
+        if q_len == 0 and p_len == 0:
+            print("\n   ✅ All Reduce tasks processed.")
+            # 再等一小会儿，确保所有容器感知到空闲并自动退出
+            time.sleep(5)
+            break
+
+        print(f"      Remaining: {q_len} | Processing: {p_len}   ", end='\r')
+        time.sleep(2)
     # ---------------------------------------------------------
     # 4. 图计算 (PageRank)
     # ---------------------------------------------------------

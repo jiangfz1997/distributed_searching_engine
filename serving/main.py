@@ -28,7 +28,12 @@ class SearchResult(BaseModel):
 def search_api(
         q: str = Query(..., min_length=1, description="Search query"),
         # 2. 增加 limit 参数，允许前端控制返回数量
-        limit: int = Query(20, ge=1, le=100, description="Max results to return")
+        limit: int = Query(20, ge=1, le=100, description="Max results to return"),
+        pagerank: bool = Query(True, description="Whether to use PageRank for ranking"),
+        semantics: bool = Query(False, description="Whether to use semantic search"),
+        alpha: float = Query(None, ge=0.0, le=1.0, description="Balance between semantic and lexical search"),
+        beta: float = Query(None, ge=0.0, le=1.0, description="Weight for PageRank in final scoring")
+
 ):
     start_time = time.time()
 
@@ -36,7 +41,7 @@ def search_api(
     logger.info(f"Received query: '{q}' with limit {limit}")
 
     # 调用引擎 (传入 limit)
-    results = engine.search(q, topk=limit)
+    results = engine.search(q, topk=limit, pagerank=pagerank, use_semantics=semantics, alpha=alpha, beta=beta)
 
     duration = time.time() - start_time
     logger.info(f"Query processed in {duration:.4f}s. Found {len(results)} results.")

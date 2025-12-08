@@ -5,7 +5,7 @@ import numpy as np
 from tqdm import tqdm
 from beir import util
 from beir.datasets.data_loader import GenericDataLoader
-from urllib.parse import unquote  # <--- 新增：处理 URL 编码
+from urllib.parse import unquote
 import json
 # sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 sys.path.append("/app")
