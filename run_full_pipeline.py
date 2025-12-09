@@ -2,13 +2,57 @@ import subprocess
 import time
 import sys
 import os
+import urllib.request
+import bz2
+import shutil
 
 NUM_MAPPERS = 4
 NUM_PR_WORKERS = 4
 
+WIKI_DUMP_URL = "https://dumps.wikimedia.org/simplewiki/latest/simplewiki-latest-pages-articles.xml.bz2"
+RAW_DATA_DIR = "data/raw"
+BZ2_FILENAME = "simplewiki-latest-pages-articles.xml.bz2"
+XML_FILENAME = "simplewiki-latest-pages-articles.xml"
 
 TIMEOUT_MAPPER = 1800
 TIMEOUT_PR = 1800
+
+
+def download_data():
+    os.makedirs(RAW_DATA_DIR, exist_ok=True)
+    bz2_path = os.path.join(RAW_DATA_DIR, BZ2_FILENAME)
+    xml_path = os.path.join(RAW_DATA_DIR, XML_FILENAME)
+
+    if os.path.exists(xml_path):
+        print(f"    XML file already exists: {xml_path}")
+        return
+
+    if not os.path.exists(bz2_path):
+        print(f"    Downloading {BZ2_FILENAME} from Wikimedia...")
+        print(f"      URL: {WIKI_DUMP_URL}")
+        try:
+            def progress(count, block_size, total_size):
+                percent = int(count * block_size * 100 / total_size)
+                print(f"      Downloading... {percent}%", end="\r")
+
+            urllib.request.urlretrieve(WIKI_DUMP_URL, bz2_path, reporthook=progress)
+            print("\n      Download complete.")
+        except Exception as e:
+            print(f"    Download failed: {e}")
+            sys.exit(1)
+
+    print(f"    Extracting {BZ2_FILENAME} ... ")
+    try:
+        with bz2.open(bz2_path, "rb") as f_in, open(xml_path, "wb") as f_out:
+            shutil.copyfileobj(f_in, f_out)
+        print(f"    Extraction complete: {xml_path}")
+
+
+        os.remove(bz2_path)
+    except Exception as e:
+        print(f"    Extraction failed: {e}")
+        sys.exit(1)
+
 
 def log(msg):
     print(f"\n [PIPELINE] {msg}")
@@ -37,7 +81,7 @@ def run_cmd(args, description, ignore_error=False):
             sys.exit(1)
 
     duration = time.time() - start_time
-    print(f"   V Done ({duration:.2f}s).")
+    print(f"    Done ({duration:.2f}s).")
 
 
 def wait_for_service(service_name, check_cmd, timeout=60):
@@ -80,6 +124,8 @@ def main():
 
     run_cmd("docker-compose run --rm compute-node python compute/db_utils.py", "Initializing DB Tables (JSONB)")
 
+    log("Step 1.5: Data Preparation")
+    download_data()
 
     log("Step 2: Data Ingestion (XML -> JSONL)")
 
