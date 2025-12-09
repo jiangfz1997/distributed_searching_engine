@@ -52,7 +52,7 @@ def process_wiki_dump_parallel():
         print("XML file not found!")
         return
 
-
+    os.makedirs(os.path.dirname(OUT_FILE), exist_ok=True)
     f_out = open(OUT_FILE, "w", encoding="utf-8")
 
 
