@@ -1,0 +1,22 @@
+[
+  {"query": "Albert Einstein", "relevant": {"Albert_Einstein": 3}},
+  {"query": "Photosynthesis", "relevant": {"Photosynthesis": 3}},
+  {"query": "Roman Empire", "relevant": {"Roman_Empire": 3}},
+  {"query": "Earthquake", "relevant": {"Earthquake": 3}},
+  {"query": "Python (programming language)", "relevant": {"Python_(programming_language)": 3}},
+  {"query": "Benjamin Franklin", "relevant": {"Benjamin_Franklin": 3}},
+  {"query": "World War II", "relevant": {"World_War_II": 3}},
+  {"query": "Paris", "relevant": {"Paris": 3}},
+  {"query": "Global warming", "relevant": {"Global_warming": 3}},
+  {"query": "Malaria", "relevant": {"Malaria": 3}},
+  {"query": "American Civil War", "relevant": {"American_Civil_War": 3}},
+  {"query": "Machine learning", "relevant": {"Machine_learning": 3}},
+  {"query": "Renewable energy", "relevant": {"Renewable_energy": 3}},
+  {"query": "Internet", "relevant": {"Internet": 3}},
+  {"query": "Volcano", "relevant": {"Volcano": 3}},
+  {"query": "Climate change", "relevant": {"Climate_change": 3}},
+  {"query": "Brain", "relevant": {"Brain": 3}},
+  {"query": "Sleep", "relevant": {"Sleep": 3}},
+  {"query": "Stock market", "relevant": {"Stock_market": 3}},
+  {"query": "Depression (mood)", "relevant": {"Depression_(mood)": 3}}
+]

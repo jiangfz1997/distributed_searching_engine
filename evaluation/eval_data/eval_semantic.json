@@ -1,0 +1,22 @@
+[
+  {"query": "who is the famous physicist behind relativity", "relevant": {"Albert_Einstein": 3}},
+  {"query": "how plants turn light into energy", "relevant": {"Photosynthesis": 3, "Chlorophyll": 1}},
+  {"query": "rise and fall of rome", "relevant": {"Roman_Empire": 3, "Ancient_Rome": 2}},
+  {"query": "what happens during an earthquake", "relevant": {"Earthquake": 3, "Seismic_wave": 1}},
+  {"query": "learn to code in python", "relevant": {"Python_(programming_language)": 3, "Programming_language": 1}},
+  {"query": "who first experimented with electricity", "relevant": {"Benjamin_Franklin": 3, "Electricity": 2}},
+  {"query": "end date of the second world war", "relevant": {"World_War_II": 3}},
+  {"query": "which city is france's capital", "relevant": {"Paris": 3}},
+  {"query": "main drivers of global temperature rise", "relevant": {"Global_warming": 3, "Greenhouse_effect": 2}},
+  {"query": "how to recognise malaria", "relevant": {"Malaria": 3, "Infectious_disease": 1}},
+  {"query": "why did the american civil war start", "relevant": {"American_Civil_War": 3, "Slavery": 2}},
+  {"query": "intro to machine learning for beginners", "relevant": {"Machine_learning": 3, "Artificial_intelligence": 1}},
+  {"query": "examples of renewable power like solar and wind", "relevant": {"Renewable_energy": 3, "Solar_power": 2}},
+  {"query": "who invented the internet and how it began", "relevant": {"Internet": 3, "ARPANET": 2}},
+  {"query": "why do volcanoes erupt", "relevant": {"Volcano": 3, "Volcanic_eruptions": 2}},
+  {"query": "impact of warming on ocean ecosystems", "relevant": {"Climate_change": 3, "Ocean": 2}},
+  {"query": "how does the human brain process information", "relevant": {"Brain": 3, "Nervous_system": 2}},
+  {"query": "benefits of sleep and why it's important", "relevant": {"Sleep": 3, "Circadian_rhythm": 2}},
+  {"query": "basic mechanics of stock exchanges", "relevant": {"Stock_market": 3, "Economics": 1}},
+  {"query": "what leads to clinical depression", "relevant": {"Depression_(mood)": 3, "Mental_health": 2}}
+]

@@ -3,8 +3,11 @@ import pickle
 import glob
 import heapq
 import sys
+import json
+import redis
+import time
 from itertools import groupby
-from psycopg2.extras import Json  # 用于处理 JSONB
+from psycopg2.extras import Json
 
 sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 from compute.db_utils import get_db_connection
@@ -13,15 +16,21 @@ NUM_PARTITIONS = 16
 DATA_DIR = "/app/data"
 TEMP_DIR = os.path.join(DATA_DIR, "temp_shuffle")
 
+REDIS_HOST = os.getenv("REDIS_HOST", "redis")
+Q_SOURCE = 'queue:indexing:reducer'
+Q_PROCESSING = 'queue:indexing:reducer:processing'
+Q_DEAD = 'queue:indexing:reducer:dead'
+
 
 def run_reducer_task(partition_id):
-    print(f"⚙️  [Reducer] Processing Partition {partition_id}...")
+
+    print(f"[Reducer] Processing Partition {partition_id}...", flush=True)
 
     pattern = os.path.join(TEMP_DIR, f"part-task*-r{partition_id}.pkl")
     files = glob.glob(pattern)
 
     if not files:
-        print(f"   ⚠️ No files, skipping.")
+        print(f"  No files found for partition {partition_id}, skipping.", flush=True)
         return
 
     conn = None
@@ -38,9 +47,9 @@ def run_reducer_task(partition_id):
             file_handles.append(f)
             iterators.append(pickle.load(f))
 
+        # K-way merge sorted iterators
         merged_stream = heapq.merge(*iterators, key=lambda x: x[0])
 
-        # Postgres Upsert
         sql = """
             INSERT INTO inverted_index (term, df, postings)
             VALUES (%s, %s, %s)
@@ -49,37 +58,31 @@ def run_reducer_task(partition_id):
         """
 
         batch_data = []
-        BATCH_SIZE = 3000  # JSONB 数据量大，Batch 稍微调小
+        BATCH_SIZE = 3000
         count_terms = 0
 
-        # 流元素: (term, doc_id, tf)
         for term, group in groupby(merged_stream, key=lambda x: x[0]):
-
-            # 过滤超长垃圾词
             if len(term.encode('utf-8')) > 512: continue
 
-            # === 聚合逻辑 ===
             postings_map = {}
             for _, doc_id, tf in group:
-                # 累加 TF (正常情况下每个 doc_id 只出现一次，但为了健壮性做累加)
                 postings_map[doc_id] = postings_map.get(doc_id, 0) + tf
 
             df = len(postings_map)
 
-            # 存入 Json 对象
+
             batch_data.append((term, df, Json(postings_map)))
             count_terms += 1
 
             if len(batch_data) >= BATCH_SIZE:
                 cursor.executemany(sql, batch_data)
                 batch_data = []
-                print(f"   Indexed {count_terms} terms...", end='\r')
 
         if batch_data:
             cursor.executemany(sql, batch_data)
 
         conn.commit()
-        print(f"\n✅ [Reducer] Partition {partition_id} Done. ({count_terms} terms)")
+        print(f"[Reducer] Partition {partition_id} Done. ({count_terms} terms)", flush=True)
 
     except Exception as e:
         if conn: conn.rollback()
@@ -89,16 +92,82 @@ def run_reducer_task(partition_id):
         if cursor: cursor.close()
         if conn: conn.close()
 
+# If failed, retry or mark dead, send task back to redis
+def handle_error(r, raw_task, partition_id, error_msg, retries):
+    pipe = r.pipeline()
+    pipe.lrem(Q_PROCESSING, 1, raw_task)
 
-# 单机循环运行所有分区
-def run_all_reducers():
-    print("🚀 Starting Reducer Sequence (JSONB Mode)...")
-    for i in range(NUM_PARTITIONS):
+    if retries < 3:
+        print(f"[Reducer] Partition {partition_id} failed ({retries + 1}/3). Retrying...", flush=True)
+        new_task_data = {"id": partition_id, "retries": retries + 1}
+
+
+        pipe.lpush(Q_SOURCE, json.dumps(new_task_data))
+    else:
+        print(f"[Reducer] Partition {partition_id} DIED. Reason: {error_msg}", flush=True)
+        dead_msg = {"id": partition_id, "error": str(error_msg)}
+        pipe.rpush(Q_DEAD, json.dumps(dead_msg))
+
+    pipe.execute()
+
+
+def run_worker():
+
+    print(f"Connecting to Redis at {REDIS_HOST}...", flush=True)
+    try:
+        r = redis.Redis(host=REDIS_HOST, port=6379, decode_responses=True)
+    except Exception as e:
+        print(f"Redis connection failed: {e}", flush=True)
+        return
+
+    print("Reducer Worker Started. Waiting for partitions...", flush=True)
+
+
+    MAX_IDLE = 5
+    idle_count = 0
+
+    while True:
+        raw_task = r.brpoplpush(Q_SOURCE, Q_PROCESSING, timeout=2)
+
+        if not raw_task:
+            idle_count += 1
+            if idle_count >= MAX_IDLE:
+
+                print("Queue empty. Reducer exiting.", flush=True)
+                break
+            continue
+
+        idle_count = 0
+
+        partition_id = None
+        retries = 0
+
         try:
-            run_reducer_task(i)
+            try:
+                task_dict = json.loads(raw_task)
+                if isinstance(task_dict, int):
+                    partition_id = task_dict
+                else:
+                    partition_id = task_dict['id']
+                    retries = task_dict.get('retries', 0)
+            except:
+                partition_id = int(raw_task)
+
+            run_reducer_task(partition_id)
+
+            r.lrem(Q_PROCESSING, 1, raw_task)
+
         except Exception as e:
-            print(f"❌ Partition {i} Failed: {e}")
+            print(f"Worker Error processing {raw_task}: {e}", flush=True)
+
+
+            if partition_id is not None:
+                handle_error(r, raw_task, partition_id, str(e), retries)
+
+
+            else:
+                r.lrem(Q_PROCESSING, 1, raw_task)
 
 
 if __name__ == "__main__":
-    run_all_reducers()
+    run_worker()

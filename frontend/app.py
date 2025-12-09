@@ -1,20 +1,18 @@
+from cProfile import label
+
 import streamlit as st
 import requests
 import time
 
-# === 配置 ===
-# Docker 内部通信地址：使用服务名 "backend"
-# 如果是在本地运行不走Docker，则用 localhost
+
 BACKEND_URL = "http://backend:8000"
 
-# === 页面设置 ===
 st.set_page_config(
     page_title="SimpleWiki Search",
     page_icon="🔎",
     layout="centered"
 )
 
-# === 自定义 CSS (让界面更好看) ===
 st.markdown("""
 <style>
     .result-card {
@@ -46,27 +44,56 @@ st.markdown("""
     }
 </style>
 """, unsafe_allow_html=True)
+enable_semantics = False
 
-# === 侧边栏 ===
 with st.sidebar:
     st.header("⚙️ Search Settings")
     top_k = st.slider("Max Results", 5, 50, 10)
+
+    bm25_weight = st.slider("bm25 weight", 0.0, 1.0, 0.70)
+    pagerank_weight = st.slider("PageRank Weight", 0.0, 1.0, 0.30)
+
+    enable_pagerank = st.checkbox("Use PageRank", value=True)
+    # enable_semantics = st.checkbox("Use Semantic Search", value=False)
     st.info("Backend: FastAPI + PostgreSQL\nAlgorithm: BM25 + PageRank")
 
-# === 主界面 ===
 st.title("🔎 Wiki Search Engine")
 
-# 搜索框 (回车触发)
-query = st.text_input("", placeholder="Search for something (e.g. 'United States')...")
+# col1, col2 = st.columns([4, 1])
+#
+# with col1:
+#     query = st.text_input(
+#         "Searching Keyword",
+#         placeholder="Search for something (e.g. 'United States')..."
+#     )
+#
+# with col2:
+#     run_search = st.button("Search")
+with st.form(key='search_form'):
+    col1, col2 = st.columns([4, 1])
 
-# === 搜索逻辑 ===
-if query:
+    with col1:
+        query = st.text_input(
+            "Searching Keyword",
+            placeholder="Search for something (e.g. 'United States')..."
+        )
+
+    with col2:
+        st.write("")
+        st.write("")
+        run_search = st.form_submit_button("Search")
+if run_search and query:
     start_time = time.time()
     try:
-        # 发送请求给 Backend
         response = requests.get(
             f"{BACKEND_URL}/search",
-            params={"q": query, "limit": top_k},
+            params={"q": query,
+                    "limit": top_k,
+                    "pagerank": "true" if enable_pagerank else "false",
+                    "semantics": "true" if enable_semantics else "false",
+                    "alpha": bm25_weight,
+                    "beta": pagerank_weight
+                    },
             timeout=5
         )
 
@@ -74,20 +101,15 @@ if query:
             results = response.json()
             duration = time.time() - start_time
 
-            # 显示统计信息
             st.caption(f"Found {len(results)} results in {duration:.4f} seconds.")
 
             if not results:
                 st.warning("No results found. Try a different keyword.")
 
-            # 渲染结果列表
             for res in results:
-                # 处理标题：把下划线换成空格
                 display_title = res['doc_id'].replace("_", " ")
-                # 生成维基百科链接
                 wiki_link = f"https://simple.wikipedia.org/wiki/{res['doc_id']}"
 
-                # 使用 HTML 卡片展示
                 st.markdown(f"""
                 <div class="result-card">
                     <a href="{wiki_link}" target="_blank" class="result-title">{display_title}</a>
@@ -100,6 +122,6 @@ if query:
             st.error(f"Error {response.status_code}: {response.text}")
 
     except requests.exceptions.ConnectionError:
-        st.error("❌ Cannot connect to Backend. Is the Docker container running?")
+        st.error("Cannot connect to Backend. Is the Docker container running?")
     except Exception as e:
         st.error(f"An error occurred: {e}")

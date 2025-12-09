@@ -8,12 +8,24 @@ import os
 import logging
 from contextlib import contextmanager
 import sys
+from utils import timer
 
-# 确保能引入分词器
+# Use semantic search if sentence-transformers is installed
+# Currently not using it for simplicity of Docker images
+# Not improving much for current setup anyway
+try:
+    from sentence_transformers import SentenceTransformer, util
+    _HAS_SENTENCE_TRANSFORMERS = True
+except ImportError:
+    SentenceTransformer = None
+    util = None
+    _HAS_SENTENCE_TRANSFORMERS = False
+
+import numpy as np
+
 sys.path.append("/app")
 from compute.utils.tokenizer import analyzer
 
-# 配置日志
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
@@ -26,11 +38,31 @@ class SearchEngine:
         self.pg_db = os.getenv("PG_DB", "search_engine")
 
         self.k1 = 1.5
-        self.b = 0.75
+        self.b = 0.4
         self.alpha = 0.7
         self.beta = 0.3
 
-        print("🔌 Initializing PostgreSQL Connection Pool...", flush=True)
+
+        self.enable_semantic = False
+        self.semantic_topk = 50  # semantic rerank for top K (try set larger but query time increase)
+        self.semantic_lambda = 0.6  # BM25 weight
+
+
+        if self.enable_semantic and _HAS_SENTENCE_TRANSFORMERS:
+            print("Loading semantic model...", flush=True)
+            self.semantic_model = SentenceTransformer("sentence-transformers/all-MiniLM-L6-v2")
+            print("Semantic model loaded.", flush=True)
+        else:
+            print("Semantic search disabled.", flush=True)
+            self.semantic_model = None
+            self.enable_semantic = False
+
+        self._initialize_database_conn_pool()
+        self._load_global_stats()
+        self._initialize_database_indexes()
+
+    def _initialize_database_conn_pool(self):
+        print("Initializing PostgreSQL Connection Pool...", flush=True)
         import time
         max_retries = 10
         for i in range(max_retries):
@@ -40,14 +72,40 @@ class SearchEngine:
                     host=self.pg_host, user=self.pg_user,
                     password=self.pg_pass, dbname=self.pg_db
                 )
-                print("✅ DB Connection Pool created!", flush=True)
+                print("DB Connection Pool created!", flush=True)
                 break
             except Exception as e:
                 if i == max_retries - 1: raise e
-                print(f"⚠️ DB not ready yet. Retrying...", flush=True)
+                print(f"DB not ready yet. Retrying...", flush=True)
                 time.sleep(2)
 
-        self._load_global_stats()
+    def _initialize_database_indexes(self):
+
+        print("Checking database indexes...", flush=True)
+        try:
+            with self._get_conn() as conn:
+                with conn.cursor() as cur:
+
+                    cur.execute("""
+                        CREATE INDEX IF NOT EXISTS idx_inverted_term 
+                        ON inverted_index(term);
+                    """)
+
+                    cur.execute("""
+                        CREATE INDEX IF NOT EXISTS idx_metadata_doc_id 
+                        ON metadata(doc_id);
+                    """)
+
+                    cur.execute("""
+                        CREATE INDEX IF NOT EXISTS idx_pagerank_doc_id 
+                        ON pagerank(doc_id);
+                    """)
+
+                conn.commit()
+
+            print("Indexes checked/created successfully.", flush=True)
+        except Exception as e:
+            print(f"Warning: Failed to create indexes: {e}", flush=True)
 
     @contextmanager
     def _get_conn(self):
@@ -61,7 +119,7 @@ class SearchEngine:
             self.pg_pool.putconn(conn)
 
     def _load_global_stats(self):
-        print("⚙️ Loading global stats...", flush=True)
+        print("Loading global stats...", flush=True)
         try:
             with self._get_conn() as conn:
                 with conn.cursor() as cur:
@@ -72,12 +130,13 @@ class SearchEngine:
                     cur.execute("SELECT count(*) FROM metadata")
                     row = cur.fetchone()
                     self.N = int(row[0]) if row else 0
-            print(f"   Stats loaded: N={self.N}, AvgDL={self.avgdl:.2f}", flush=True)
+            print(f" Stats loaded: N={self.N}, AvgDL={self.avgdl:.2f}", flush=True)
         except Exception as e:
-            print(f"⚠️ Stats failed: {e}", flush=True)
+            print(f" Stats failed: {e}", flush=True)
             self.avgdl = 200.0;
             self.N = 100000
 
+    @timer
     def get_metadata_bulk(self, doc_ids):
         res = {}
         if not doc_ids: return res
@@ -93,7 +152,7 @@ class SearchEngine:
                     clean = clean_map[raw_id]
                     if clean in temp_data: res[raw_id] = temp_data[clean]
         return res
-
+    @timer
     def get_pagerank_bulk(self, doc_ids):
         res = {}
         if not doc_ids: return res
@@ -110,6 +169,7 @@ class SearchEngine:
                     if clean in temp_scores: res[raw_id] = temp_scores[clean]
         return res
 
+    @timer
     def get_snippets_bulk(self, doc_ids, query_tokens):
         snippets = {}
         if not doc_ids: return snippets
@@ -127,55 +187,89 @@ class SearchEngine:
                         snippets[raw_id] = self.make_snippet(temp_texts[clean], query_tokens)
         return snippets
 
+
     def calculate_bm25(self, tf, doc_length, doc_freq):
         val = (self.N - doc_freq + 0.5) / (doc_freq + 0.5) + 1
+
+        # Prevent log(0) issue
         if val <= 0: val = 1.00001
         idf = math.log(val)
         numerator = tf * (self.k1 + 1)
         denominator = tf + self.k1 * (1 - self.b + self.b * (doc_length / self.avgdl))
         return idf * (numerator / denominator)
 
-    def search(self, query, topk=20):
-        print(f"🔍 Searching for: {query}", flush=True)
-        # 1. 使用 NLTK Analyzer 分词
-        tokens = analyzer.analyze(query)
-        # 去重
-        tokens = list(set(tokens))
-
-        if not tokens: return []
-        print(f"   Tokens: {tokens}", flush=True)
-
+    @timer
+    def _get_inverted_index(self, tokens):
         docs_tracker = {}
 
         with self._get_conn() as conn:
             with conn.cursor() as cur:
-                # === 核心修改：读取 JSONB ===
-                # postings 已经是 dict 类型: {"doc1": 5, "doc2": 1}
                 sql = "SELECT term, df, postings FROM inverted_index WHERE term IN %s"
                 cur.execute(sql, (tuple(tokens),))
                 rows = cur.fetchall()
-
                 for term, df, postings_dict in rows:
                     if not postings_dict: continue
 
-                    # 遍历 JSONB 字典
-                    # key=doc_id, value=tf
                     count = 0
                     for doc_id, tf in postings_dict.items():
                         count += 1
-                        # 熔断
                         if count > 20000: break
 
                         if doc_id not in docs_tracker:
                             docs_tracker[doc_id] = {'matches': []}
 
-                        # 记录真实的 TF 和 DF
                         docs_tracker[doc_id]['matches'].append({
                             'term': term,
-                            'tf': tf,  # <--- 使用真实的词频
+                            'tf': tf,
                             'df': df
                         })
+        return docs_tracker
 
+    def search(self, query, topk=20, pagerank=True, use_semantics=False, alpha=None, beta=None):
+        print(f" Searching for: {query}, use page rank: {pagerank}, use semantics: {use_semantics}, alpha:{alpha}, beta:{beta}", flush=True)
+
+        if self.N == 0 or self.avgdl == 0.0:
+            print(f"Detected self.N == {self.N}, self.avgdl == {self.avgdl}, attempting to reload stats...", flush=True)
+            self._load_global_stats()
+
+        if self.N == 0:
+            print("Error: Metadata table is empty!", flush=True)
+            return []
+
+
+        # tokenize query
+        tokens = analyzer.analyze(query)
+        tokens = list(set(tokens))
+
+        if not tokens: return []
+        print(f"   Tokens: {tokens}", flush=True)
+
+        # docs_tracker = {}
+        #
+        # with self._get_conn() as conn:
+        #     with conn.cursor() as cur:
+        #
+        #         sql = "SELECT term, df, postings FROM inverted_index WHERE term IN %s"
+        #         cur.execute(sql, (tuple(tokens),))
+        #         rows = cur.fetchall()
+        #
+        #         for term, df, postings_dict in rows:
+        #             if not postings_dict: continue
+        #
+        #             count = 0
+        #             for doc_id, tf in postings_dict.items():
+        #                 count += 1
+        #                 if count > 20000: break
+        #
+        #                 if doc_id not in docs_tracker:
+        #                     docs_tracker[doc_id] = {'matches': []}
+        #
+        #                 docs_tracker[doc_id]['matches'].append({
+        #                     'term': term,
+        #                     'tf': tf,
+        #                     'df': df
+        #                 })
+        docs_tracker = self._get_inverted_index(tokens)
         candidate_ids = list(docs_tracker.keys())
         if not candidate_ids: return []
 
@@ -192,20 +286,47 @@ class SearchEngine:
             for match in data['matches']:
                 bm25_score += self.calculate_bm25(match['tf'], doc_len, match['df'])
 
-            pr_score = pr_scores.get(doc_id, 0.0)
-            normalized_pr = math.log(1 + pr_score * 100000)
+            if pagerank:
+                pr_score = pr_scores.get(doc_id, 0.0)
+                normalized_pr = math.log(1 + pr_score * 10000000)
+                if alpha is None: alpha = self.alpha
+                if beta is None: beta = self.beta
+                final_score = (alpha * bm25_score) + (beta * normalized_pr)
+            else:
+                normalized_pr = 0.0
+                final_score = bm25_score
 
-            final_score = (self.alpha * bm25_score) + (self.beta * normalized_pr)
             clean_id = doc_id.replace("_", " ").lower()
             query_lower = query.lower()
 
-            if clean_id == query_lower:
-                # 1. 完全匹配奖励 (Exact Match Bonus)
+
+            # TODO: Tune these multipliers
+            # Try to give exact match more weight
+            # 3.0 might to too much?
+            # if clean_id == query_lower:
+            #     final_score *= 3.0
+            # elif query_lower in clean_id:
+            #     final_score *= 1.2
+
+
+
+            id_text = doc_id.replace("_", " ")
+            id_tokens = analyzer.analyze(id_text)
+            query_set = set(tokens)
+            id_set = set(id_tokens)
+
+            # Try both-way matching for fuzzy title match
+            if not id_set:
+                pass
+
+            elif query_set == id_set:
                 final_score *= 3.0
-            elif query_lower in clean_id:
-                # 2. 部分匹配奖励 (Partial Match Bonus)
-                final_score *= 1.2
-                # ===================================
+
+            elif query_set.issubset(id_set):
+                final_score *= 1.5
+
+            elif id_set.issubset(query_set):
+                final_score *= 2.0
 
             scored_results.append({
                 "doc_id": doc_id,
@@ -214,18 +335,19 @@ class SearchEngine:
             })
 
         scored_results.sort(key=lambda x: x['score'], reverse=True)
+        if use_semantics and self.semantic_model is not None and scored_results:
+            print("   Performing semantic re-ranking...", flush=True)
+            scored_results = self.semantic_rerank(query, scored_results, tokens)
         top_results = scored_results[:topk]
 
         print("   Generating snippets...", flush=True)
         top_ids = [r['doc_id'] for r in top_results]
         snippets_map = self.get_snippets_bulk(top_ids, tokens)
 
-        # 过滤脏数据
         final_list = []
         for res in top_results:
             snippet = snippets_map.get(res['doc_id'], "No content available.")
 
-            # 简单过滤逻辑
             if snippet == "No content available.": continue
             if res['doc_id'].startswith("_born"): continue
 
@@ -234,52 +356,118 @@ class SearchEngine:
 
         return final_list
 
+
+    # Semantic Reranking (Not used in current stages, saved for future experiments)
+    def semantic_rerank(self, query, scored_results, tokens):
+        if self.semantic_model is not None and scored_results:
+            cand_results = scored_results[:self.semantic_topk]
+            cand_ids = [r["doc_id"] for r in cand_results]
+            print(f"Cand_ids for semantic re-rank: {cand_ids}", flush=True)
+
+            print("   Semantic Preparing texts for re-ranking...", flush=True)
+
+            raw_text_map = self.get_raw_text_sample_bulk(cand_ids, limit=300)
+
+            doc_texts = []
+            valid_items = []
+
+            for item in cand_results:
+                did = item["doc_id"]
+                content = raw_text_map.get(did, "")
+
+
+                title = did.replace("_", " ")
+
+
+                semantic_input = f"{title}. {content}"
+
+                doc_texts.append(semantic_input)
+                valid_items.append(item)
+
+            if doc_texts:
+                query_emb = self.semantic_model.encode(
+                    query,
+                    convert_to_tensor=True,
+                    normalize_embeddings=True
+                )
+                doc_embs = self.semantic_model.encode(
+                    doc_texts,
+                    convert_to_tensor=True,
+                    normalize_embeddings=True
+                )
+                cos_scores = util.cos_sim(query_emb, doc_embs)[0].cpu().numpy()
+
+                max_lex = max(item["score"] for item in valid_items) or 1.0
+                for item, sem in zip(valid_items, cos_scores):
+                    lex_norm = item["score"] / max_lex
+                    sem_norm = (float(sem) + 1.0) / 2.0
+                    combined = (
+                            self.semantic_lambda * lex_norm +
+                            (1.0 - self.semantic_lambda) * sem_norm
+                    )
+                    item["combined_score"] = combined
+
+                valid_items.sort(key=lambda x: x["combined_score"], reverse=True)
+
+                scored_results = valid_items + scored_results[self.semantic_topk:]
+
+
+        return scored_results
+
+    def get_raw_text_sample_bulk(self, doc_ids, limit=300):
+        res = {}
+        if not doc_ids: return res
+
+        clean_map = {did: did.lstrip('_') for did in doc_ids}
+        clean_ids = list(set(clean_map.values()))
+
+        with self._get_conn() as conn:
+            with conn.cursor(cursor_factory=RealDictCursor) as cur:
+                sql = "SELECT doc_id, substr(text, 1, %s) as sample FROM metadata WHERE doc_id IN %s"
+                cur.execute(sql, (limit, tuple(clean_ids)))
+
+                temp_data = {row['doc_id']: row['sample'] for row in cur.fetchall()}
+
+                for raw_id in doc_ids:
+                    clean = clean_map[raw_id]
+                    if clean in temp_data:
+                        res[raw_id] = temp_data[clean]
+        return res
+
+
+    # Get a snippet
     def make_snippet(self, text, query_tokens, window_size=150):
-        """
-        生成 Snippet：基于 Tokenizer 匹配，支持 Stemming，高亮最佳片段。
-        """
+
         if not text: return "No content available."
 
-        # 1. 对原文进行分词，并记录每个词的 (start, end) 位置
-        # 使用 NLTK 风格的正则，但我们需要保留位置信息
-        # finditer 返回迭代器，包含 match object (span)
-        word_iter = re.finditer(r'\b[a-zA-Z]{2,}\b', text)
+
+        word_iter = re.finditer(r'[a-zA-Z0-9]+', text)
 
         best_span = None
 
-        # 2. 遍历原文单词，进行 Stemming 匹配
+        q_set = set(query_tokens)
+
+
         for match in word_iter:
             raw_word = match.group()
-            # 这里的 stemmed_word 应该和 analyzer.analyze 的逻辑一致
-            # 为了性能，我们手动调一下 stemmer，不再调 analyzer (因为 analyzer 会去停用词)
-            # 我们希望即使是停用词也能保留位置
-            from nltk.stem import SnowballStemmer
-            stemmer = SnowballStemmer("english")
-            stemmed_word = stemmer.stem(raw_word.lower())
 
-            if stemmed_word in query_tokens:
-                # 找到匹配！
+
+            stemmed = analyzer.stemmer.stem(raw_word.lower())
+
+            if stemmed in q_set:
                 start, end = match.span()
 
-                # 3. 确定窗口范围
-                # 尝试以该词为中心
                 snippet_start = max(0, start - window_size // 2)
                 snippet_end = min(len(text), end + window_size // 2)
 
-                # 稍微调整边界，避免截断单词 (可选优化，这里简单截断)
                 best_span = (snippet_start, snippet_end)
-                break  # 找到第一个匹配就返回 (简单策略)
-                # 进阶策略：继续找，看哪个窗口包含的 query_tokens 最多 (Dense Window)
+                break
 
-        # 4. 生成结果
         if best_span:
             s, e = best_span
-            snippet = text[s:e].replace('\n', ' ')
-            # 如果不是从头开始，加省略号
+            snippet = text[s:e].replace('\n', ' ').strip()
             prefix = "..." if s > 0 else ""
             suffix = "..." if e < len(text) else ""
             return f"{prefix}{snippet}{suffix}"
         else:
-            # 没找到匹配词 (可能是停用词匹配，或者 query tokens 被过滤没了)
-            # 返回开头一段
-            return text[:window_size] + "..."
+            return text[:window_size].replace('\n', ' ') + "..."
