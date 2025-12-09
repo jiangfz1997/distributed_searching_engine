@@ -5,6 +5,7 @@ import os
 import urllib.request
 import bz2
 import shutil
+import argparse
 
 NUM_MAPPERS = 4
 NUM_PR_WORKERS = 4
@@ -12,24 +13,69 @@ NUM_PR_WORKERS = 4
 WIKI_DUMP_URL = "https://dumps.wikimedia.org/simplewiki/latest/simplewiki-latest-pages-articles.xml.bz2"
 RAW_DATA_DIR = "data/raw"
 BZ2_FILENAME = "simplewiki-latest-pages-articles.xml.bz2"
-XML_FILENAME = "simplewiki-latest-pages-articles.xml"
+TARGET_XML_FILENAME = "simplewiki-latest-pages-articles.xml"
 
 TIMEOUT_MAPPER = 1800
 TIMEOUT_PR = 1800
 
 
-def download_data():
-    os.makedirs(RAW_DATA_DIR, exist_ok=True)
-    bz2_path = os.path.join(RAW_DATA_DIR, BZ2_FILENAME)
-    xml_path = os.path.join(RAW_DATA_DIR, XML_FILENAME)
+# def download_data():
+#     os.makedirs(RAW_DATA_DIR, exist_ok=True)
+#     bz2_path = os.path.join(RAW_DATA_DIR, BZ2_FILENAME)
+#     xml_path = os.path.join(RAW_DATA_DIR, TARGET_XML_FILENAME)
+#
+#     if os.path.exists(xml_path):
+#         print(f"    XML file already exists: {xml_path}")
+#         return
+#
+#     if not os.path.exists(bz2_path):
+#         print(f"    Downloading {BZ2_FILENAME} from Wikimedia...")
+#         print(f"      URL: {WIKI_DUMP_URL}")
+#         try:
+#             def progress(count, block_size, total_size):
+#                 percent = int(count * block_size * 100 / total_size)
+#                 print(f"      Downloading... {percent}%", end="\r")
+#
+#             urllib.request.urlretrieve(WIKI_DUMP_URL, bz2_path, reporthook=progress)
+#             print("\n      Download complete.")
+#         except Exception as e:
+#             print(f"    Download failed: {e}")
+#             sys.exit(1)
+#
+#     print(f"    Extracting {BZ2_FILENAME} ... ")
+#     try:
+#         with bz2.open(bz2_path, "rb") as f_in, open(xml_path, "wb") as f_out:
+#             shutil.copyfileobj(f_in, f_out)
+#         print(f"    Extraction complete: {xml_path}")
+#
+#
+#         os.remove(bz2_path)
+#     except Exception as e:
+#         print(f"    Extraction failed: {e}")
+#         sys.exit(1)
 
-    if os.path.exists(xml_path):
-        print(f"    XML file already exists: {xml_path}")
+def prepare_data(custom_file=None):
+    os.makedirs(RAW_DATA_DIR, exist_ok=True)
+    target_path = os.path.join(RAW_DATA_DIR, TARGET_XML_FILENAME)
+
+    if custom_file:
+        print(f"    Using custom input file: {custom_file}")
+        if not os.path.exists(custom_file):
+            print(f"    Error: File '{custom_file}' not found!")
+            sys.exit(1)
+
+        print(f"    Copying to {target_path} ...")
+        shutil.copy(custom_file, target_path)
+        print("    Custom file ready.")
         return
 
+    if os.path.exists(target_path):
+        print(f"    Default XML file already exists: {target_path}")
+        return
+
+    bz2_path = os.path.join(RAW_DATA_DIR, BZ2_FILENAME)
     if not os.path.exists(bz2_path):
         print(f"    Downloading {BZ2_FILENAME} from Wikimedia...")
-        print(f"      URL: {WIKI_DUMP_URL}")
         try:
             def progress(count, block_size, total_size):
                 percent = int(count * block_size * 100 / total_size)
@@ -41,13 +87,11 @@ def download_data():
             print(f"    Download failed: {e}")
             sys.exit(1)
 
-    print(f"    Extracting {BZ2_FILENAME} ... ")
+    print(f"    Extracting {BZ2_FILENAME} ...")
     try:
-        with bz2.open(bz2_path, "rb") as f_in, open(xml_path, "wb") as f_out:
+        with bz2.open(bz2_path, "rb") as f_in, open(target_path, "wb") as f_out:
             shutil.copyfileobj(f_in, f_out)
-        print(f"    Extraction complete: {xml_path}")
-
-
+        print(f"    Extraction complete: {target_path}")
         os.remove(bz2_path)
     except Exception as e:
         print(f"    Extraction failed: {e}")
@@ -100,6 +144,11 @@ def wait_for_service(service_name, check_cmd, timeout=60):
 
 
 def main():
+    parser = argparse.ArgumentParser(description="Distributed Search Engine Pipeline")
+    parser.add_argument("--file", type=str,
+                        help="Path to a local XML file to process. If ignored, downloads SimpleWiki.")
+    args = parser.parse_args()
+
     total_start = time.time()
     print("=" * 60)
     print("    INDUSTRIAL SEARCH ENGINE - AUTOMATION PIPELINE")
@@ -125,8 +174,8 @@ def main():
     run_cmd("docker-compose run --rm compute-node python compute/db_utils.py", "Initializing DB Tables (JSONB)")
 
     log("Step 1.5: Data Preparation")
-    download_data()
-
+    # download_data()
+    prepare_data(args.file)
     log("Step 2: Data Ingestion (XML -> JSONL)")
 
     run_cmd("docker-compose run --rm compute-node python ingestion/run_ingestion_multi_process.py", "Running Ingestion")

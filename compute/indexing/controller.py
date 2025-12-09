@@ -40,7 +40,7 @@ def publish_mapper_tasks(r, chunk_size=1000):
             # print(f"Line!!!!!!! {line}")
             lines_count += 1
             if lines_count >= chunk_size:
-                print(f"Line count reaching chunk size {lines_count}")
+                # print(f"Line count reaching chunk size {lines_count}")
                 end_offset = f.tell()
 
                 task = {

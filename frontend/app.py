@@ -54,22 +54,34 @@ with st.sidebar:
     pagerank_weight = st.slider("PageRank Weight", 0.0, 1.0, 0.30)
 
     enable_pagerank = st.checkbox("Use PageRank", value=True)
-    # enable_sementics = st.checkbox("Use Semantic Search", value=False)
+    # enable_semantics = st.checkbox("Use Semantic Search", value=False)
     st.info("Backend: FastAPI + PostgreSQL\nAlgorithm: BM25 + PageRank")
 
 st.title("🔎 Wiki Search Engine")
 
-col1, col2 = st.columns([4, 1])
+# col1, col2 = st.columns([4, 1])
+#
+# with col1:
+#     query = st.text_input(
+#         "Searching Keyword",
+#         placeholder="Search for something (e.g. 'United States')..."
+#     )
+#
+# with col2:
+#     run_search = st.button("Search")
+with st.form(key='search_form'):
+    col1, col2 = st.columns([4, 1])
 
-with col1:
-    query = st.text_input(
-        "Searching Keyword",
-        placeholder="Search for something (e.g. 'United States')..."
-    )
+    with col1:
+        query = st.text_input(
+            "Searching Keyword",
+            placeholder="Search for something (e.g. 'United States')..."
+        )
 
-with col2:
-    run_search = st.button("Search")
-
+    with col2:
+        st.write("")
+        st.write("")
+        run_search = st.form_submit_button("Search")
 if run_search and query:
     start_time = time.time()
     try:
@@ -78,7 +90,7 @@ if run_search and query:
             params={"q": query,
                     "limit": top_k,
                     "pagerank": "true" if enable_pagerank else "false",
-                    "semantics": "true" if enable_sementics else "false",
+                    "semantics": "true" if enable_semantics else "false",
                     "alpha": bm25_weight,
                     "beta": pagerank_weight
                     },

@@ -2,3 +2,7 @@
 data/
 *.log
 *.tmp
+log/
+
+!data/raw/simplewiki-toy.xml
+!data/raw/simplewiki-toy-titles.txt
