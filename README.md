@@ -19,11 +19,14 @@ Ensure the following are installed and running on your system:
 ## How to Run
 
 You can run the system in two modes: **Quick Demo** (recommended for evaluation) or **Full Pipeline** (re-computation from scratch).
+**Important:** Make sure Docker Desktop is running before executing the commands.
+**Important:** If using custom XML files, ensure they:
+               follow the same structure as the Simple English Wikipedia dump.
+                move file to data/raw/ directory.
 
 ### Option 1: Quick Verification (Toy Dataset)
 Approximate time: ~3 minutes
 This mode executes the **full distributed pipeline** (Ingestion -> Indexing -> PageRank -> Serving) using a small subset of data (5000 pages). It allows you to verify the system logic in seconds without waiting for the full dataset.
-
 1.  Open a terminal in the project root and run:
     ```bash
     python run_full_pipeline.py --file data/raw/simplewiki-toy.xml
@@ -51,6 +54,15 @@ This mode performs the entire ETL process from scratch: downloading raw XML, cle
     * **PageRank**: Run Controller and Worker containers to compute authority scores.
     * **Export**: Persist metadata and scores to PostgreSQL.
     * **Deploy**: Start backend and frontend services.
+
+3.  Access the application:
+    * **Frontend UI**: http://localhost:8501
+    * **Backend API Docs**: http://localhost:8000/docs
+
+4. For evaluation, run following command in a separate terminal:
+    ```bash
+    docker-compose run --rm eval-node python evaluation/manual_evaluate.py
+    ```
 
 ## Project Structure
 
