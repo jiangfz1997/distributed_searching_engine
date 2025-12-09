@@ -6,12 +6,10 @@ import multiprocessing
 from functools import partial
 import time
 
-# === 配置 ===
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 XML_FILE = os.path.join(BASE_DIR, "data/raw/simplewiki-latest-pages-articles.xml")
 OUT_FILE = os.path.join(BASE_DIR, "data/intermediate/corpus.jsonl")
 
-# 设定并行数量 (默认使用所有 CPU 核心)
 NUM_WORKERS = max(1, multiprocessing.cpu_count() - 1)
 
 
@@ -21,14 +19,10 @@ def normalize_id(title):
 
 
 def parse_worker(task_data):
-    """
-    这是运行在子进程里的函数。
-    task_data: (title, raw_text)
-    """
+
     title, raw_text = task_data
 
     try:
-        # === 耗时操作在这里并行执行 ===
         wikicode = mwparserfromhell.parse(raw_text)
 
         clean_text = wikicode.strip_code().strip()
@@ -51,28 +45,28 @@ def parse_worker(task_data):
 
 
 def process_wiki_dump_parallel():
-    print(f"🚀 Parsing XML: {XML_FILE}")
-    print(f"🔥 Starting Multiprocessing Pool with {NUM_WORKERS} workers...")
+    print(f"Parsing XML: {XML_FILE}")
+    print(f"Starting Multiprocessing Pool with {NUM_WORKERS} workers...")
 
     if not os.path.exists(XML_FILE):
-        print("❌ XML file not found!")
+        print("XML file not found!")
         return
 
-    # 准备写入文件
+
     f_out = open(OUT_FILE, "w", encoding="utf-8")
 
-    # 启动进程池
+
     pool = multiprocessing.Pool(processes=NUM_WORKERS)
 
     context = ET.iterparse(XML_FILE, events=("end",))
 
-    # 批处理队列
+
     batch_size = 1000
     batch_data = []
 
     count = 0
 
-    # 计时开始
+
     start_time = time.time()
 
     for event, elem in context:
@@ -86,17 +80,15 @@ def process_wiki_dump_parallel():
             ns = elem.find("{*}ns")
             ns_val = int(ns.text) if ns is not None else 0
 
-            # 只有主条目才放入队列
+
             if title and raw_text and ns_val == 0 and not raw_text.lower().startswith("#redirect"):
                 batch_data.append((title, raw_text))
 
-            # 攒够一波数据，或者 XML 读完了，就发给工人去干活
+             # Try using multiprocessing to process the batch
             if len(batch_data) >= batch_size:
-                # 提交任务到进程池
-                # imap_unordered 比 map 更快，因为不保证顺序（我们也不需要顺序）
+
                 results = pool.imap_unordered(parse_worker, batch_data)
 
-                # 收集结果并写入
                 for res in results:
                     if res:
                         f_out.write(res + "\n")
@@ -104,14 +96,12 @@ def process_wiki_dump_parallel():
                         if count % 1000 == 0:
                             elapsed = time.time() - start_time
                             speed = count / elapsed
-                            print(f"✅ Processed {count} docs... (Speed: {speed:.2f} docs/s)", flush=True)
+                            print(f"Processed {count} docs... (Speed: {speed:.2f} docs/s)", flush=True)
 
-                # 清空批次
                 batch_data = []
 
             elem.clear()
 
-    # 处理最后一波剩余的数据
     if batch_data:
         results = pool.imap_unordered(parse_worker, batch_data)
         for res in results:
@@ -123,10 +113,9 @@ def process_wiki_dump_parallel():
     pool.join()
     f_out.close()
 
-    print(f"\n✨ Done! Saved {count} docs to {OUT_FILE}")
+    print(f"\nDone! Saved {count} docs to {OUT_FILE}")
 
 
 if __name__ == "__main__":
-    # Windows/Mac 上 multiprocessing 需要这个保护
     multiprocessing.freeze_support()
     process_wiki_dump_parallel()

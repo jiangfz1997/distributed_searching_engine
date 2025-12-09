@@ -6,11 +6,11 @@ import redis
 import sys
 from collections import Counter
 
-# 引入共享分词器
+
 sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 from compute.utils.tokenizer import analyzer
 
-# === 配置 ===
+
 NUM_PARTITIONS = 16
 DATA_DIR = "/app/data"
 INPUT_FILE = os.path.join(DATA_DIR, "intermediate", "corpus.jsonl")
@@ -37,7 +37,6 @@ def process_task(task):
         f.seek(start_offset)
         chunk_data = f.read(read_bytes)
 
-    # 处理这一块数据
     lines = chunk_data.decode('utf-8', errors='ignore').strip().split('\n')
     doc_count = 0
 
@@ -48,14 +47,12 @@ def process_task(task):
             doc_id = doc['id']
             text = doc.get('text', '')
 
-            # 1. 使用 NLTK Analyzer 分词
+
             tokens = analyzer.analyze(text)
 
-            # 2. 统计局部词频 (Local TF)
-            # 结果: {'apple': 3, 'banana': 1}
-            term_counts = Counter(tokens)
 
-            # 3. 分发数据: (term, doc_id, tf)
+            term_counts = Counter(tokens)
+            # print(f"Term counts {term_counts}")
             for term, tf in term_counts.items():
                 h = int(hashlib.md5(term.encode()).hexdigest(), 16)
                 p_idx = h % NUM_PARTITIONS
@@ -65,12 +62,10 @@ def process_task(task):
         except json.JSONDecodeError:
             continue
 
-    # 4. 写入中间文件 (Shuffle Write)
     for p_idx in range(NUM_PARTITIONS):
         data = buckets[p_idx]
         if not data: continue
 
-        # 按 term 排序
         data.sort(key=lambda x: x[0])
 
         filename = f"part-task{task_id}-r{p_idx}.pkl"
@@ -79,17 +74,17 @@ def process_task(task):
         with open(path, 'wb') as out_f:
             pickle.dump(data, out_f)
 
-    print(f"✅ [Mapper] Task {task_id} done. {doc_count} docs.")
+    print(f"[Mapper] Task {task_id} done. {doc_count} docs.")
 
 
 def run_worker():
     try:
         r = redis.Redis(host=REDIS_HOST, port=6379, decode_responses=True)
     except:
-        print("❌ Redis connection failed.")
+        print("Redis connection failed.")
         return
 
-    print(f"👷 Mapper Worker Started.")
+    print(f"Mapper Worker Started.")
     MAX_IDLE = 5
     idle_count = 0
 
@@ -98,7 +93,7 @@ def run_worker():
         if not raw_task:
             idle_count += 1
             if idle_count >= MAX_IDLE:
-                print("👋 Queue empty. Mapper exiting.")
+                print("Queue empty. Mapper exiting.")
                 break
             continue
 
@@ -108,7 +103,7 @@ def run_worker():
             process_task(task)
             r.lrem(Q_PROCESSING, 1, raw_task)
         except Exception as e:
-            print(f"❌ Error: {e}")
+            print(f"Error: {e}")
             r.lrem(Q_PROCESSING, 1, raw_task)
 
 

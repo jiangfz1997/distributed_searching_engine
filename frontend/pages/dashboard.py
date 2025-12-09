@@ -1,8 +1,14 @@
+# TODO:
+# Add more metrics
+# Add button to trigger Indexing / pagerank or other jobs
+# Add logs view
+# Add worker health status
+
 import streamlit as st
 import requests
 import pandas as pd
 import time
-import plotly.express as px  # 需要在 requirements.txt 加 plotly
+import plotly.express as px
 
 API_URL = "http://backend:8000"
 
@@ -57,7 +63,6 @@ while True:
                 fig = px.bar(chart_data, x="Type", y="Count", title="Queue Status", color="Type")
                 st.plotly_chart(fig, use_container_width=True)
 
-                # 状态指示灯
                 if data.get("redis_alive"):
                     st.success("Redis Connection: Healthy")
                 else:

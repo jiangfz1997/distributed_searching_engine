@@ -1,5 +1,4 @@
 services:
-  # === 公共基础设施 ===
   redis:
     image: redis:alpine
     container_name: se-redis
@@ -30,10 +29,11 @@ services:
 
 
   compute-node:
-    build:
-      context: .
-      dockerfile: Dockerfile
-    image: search-compute:v1
+#    build:
+#      context: .
+#      dockerfile: Dockerfile
+#    image: search-compute:v1
+    image: jiangfz/search-compute:lite
     volumes:
       - .:/app
     networks:
@@ -43,7 +43,8 @@ services:
     command: ["python", "--version"]
 
   pr-controller:
-    image: search-compute:v1
+#    image: search-compute:v1
+    image: jiangfz/search-compute:lite
     container_name: pr-controller
     volumes:
       - .:/app
@@ -58,7 +59,8 @@ services:
     command: ["python", "compute/pagerank/controller.py"]
 
   pr-worker:
-    image: search-compute:v1
+#    image: search-compute:v1
+    image: jiangfz/search-compute:lite
     volumes:
       - .:/app
     environment:
@@ -71,10 +73,12 @@ services:
       - pr-controller
     command: ["python", "compute/pagerank/worker.py"]
   backend:
-    build:
-      context: .
-      dockerfile: serving/Dockerfile
-    image: search-backend:v1
+#    build:
+#      context: .
+#      dockerfile: serving/Dockerfile
+
+#    image: search-backend:v1
+    image: jiangfz/search-backend:lite
     container_name: se-backend
     ports:
       - "8000:8000"
@@ -111,11 +115,13 @@ services:
     command: [ "python", "--version" ]
 
   frontend:
-    build: ./frontend
-    image: search-frontend:v1
+#    build: ./frontend
+    image: jiangfz/search-frontend:lite
     container_name: se-frontend
     ports:
       - "8501:8501"
+    volumes:
+      - .:/app
     networks:
       - search-net
     depends_on:

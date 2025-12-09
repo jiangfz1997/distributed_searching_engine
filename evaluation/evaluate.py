@@ -1,3 +1,8 @@
+# Evaluate the search engine on the DBpedia-Entity BEIR benchmark
+# Simple wiki data is not matching BeIR IDs and have lots of missing docs
+# This script tries to find intersections and evaluate only on those
+# Maybe there's a better evaluation dataset or use full wiki dump later
+
 import sys
 import os
 import math
@@ -13,14 +18,13 @@ sys.path.append("/app")
 from serving.search_engine import SearchEngine
 from compute.db_utils import get_db_connection
 
-# === 配置 ===
 DATA_DIR = "/app/data"
 BENCHMARK_NAME = "dbpedia-entity"
 DATA_PATH = os.path.join(DATA_DIR, "benchmark", BENCHMARK_NAME)
 
 
 def load_local_doc_ids():
-    print("📦 Loading local DocIDs from PostgreSQL...")
+    print(" Loading local DocIDs from PostgreSQL...")
     try:
         conn = get_db_connection()
         cur = conn.cursor()
@@ -28,45 +32,38 @@ def load_local_doc_ids():
         local_ids = set(row[0] for row in cur.fetchall())
         conn.close()
 
-        # === DEBUG: 打印本地 ID 样例 ===
-        print(f"✅ Loaded {len(local_ids)} local docs.")
-        print(f"🔎 [DEBUG] Local ID Samples (Postgres): {list(local_ids)[:5]}")
+
+        print(f"Loaded {len(local_ids)} local docs.")
+        print(f"[DEBUG] Local ID Samples (Postgres): {list(local_ids)[:5]}")
         return local_ids
     except Exception as e:
-        print(f"❌ DB Error: {e}")
+        print(f"DB Error: {e}")
         return set()
 
 
 def try_match_id(beir_raw_id, local_ids_set):
-    """
-    尝试匹配 BeIR ID 和 本地 SimpleWiki ID
-    """
+    # Try to find a matching local ID for the given BeIR raw ID
     candidates = []
 
-    # === 核心修复：剥离 <dbpedia:...> 外壳 ===
-    # 输入: <dbpedia:Afghan_cuisine>
-    # 输出: Afghan_cuisine
+
     clean_id = beir_raw_id.replace("<dbpedia:", "").replace(">", "")
     candidates.append(clean_id)
 
-    # 1. URL 解码 (处理特殊字符)
     decoded = unquote(clean_id)
     candidates.append(decoded)
 
-    # 2. 空格转下划线 (标准 Wiki 格式)
-    # BeIR 有时可能是 "Afghan cuisine"
+
     underscore_id = decoded.replace(" ", "_")
     candidates.append(underscore_id)
 
-    # 3. 首字母大写 (处理大小写不一致)
+
     if underscore_id:
         cap_id = underscore_id[0].upper() + underscore_id[1:]
         candidates.append(cap_id)
 
-    # === 开始匹配 ===
     for cand in candidates:
         if cand in local_ids_set:
-            return cand  # 匹配成功！
+            return cand
 
     return None
 
@@ -106,12 +103,9 @@ import csv
 
 
 def load_beir_lightweight(data_path):
-    """
-    只加载 Query 和 Qrels，跳过巨大的 Corpus
-    """
-    print("⚡ Using lightweight loader (skipping corpus)...")
 
-    # 1. 加载 Queries
+    print("⚡ Using lightweight loader...")
+
     queries = {}
     query_file = os.path.join(data_path, "queries.jsonl")
     with open(query_file, 'r', encoding='utf-8') as f:
@@ -119,32 +113,31 @@ def load_beir_lightweight(data_path):
             item = json.loads(line)
             queries[item['_id']] = item['text']
 
-    # 2. 加载 Qrels (TSV 格式: query-id, corpus-id, score)
     qrels = {}
     qrels_file = os.path.join(data_path, "qrels", "test.tsv")
     with open(qrels_file, 'r', encoding='utf-8') as f:
         reader = csv.reader(f, delimiter='\t', quoting=csv.QUOTE_MINIMAL)
-        next(reader)  # 跳过表头
+        next(reader)
         for row in reader:
             qid, doc_id, score = row[0], row[1], int(row[2])
             if qid not in qrels:
                 qrels[qid] = {}
             qrels[qid][doc_id] = score
 
-    print(f"✅ Loaded {len(queries)} queries and {len(qrels)} qrels sets.")
+    print(f"Loaded {len(queries)} queries and {len(qrels)} qrels sets.")
     return queries, qrels
 def run_evaluation():
     if not os.path.exists(DATA_PATH):
         url = "https://public.ukp.informatik.tu-darmstadt.de/thakur/BEIR/datasets/{}.zip".format(BENCHMARK_NAME)
         util.download_and_unzip(url, os.path.join(DATA_DIR, "benchmark"))
 
-    print("📖 Loading Benchmark Qrels...")
+    print("Loading Benchmark Qrels...")
     # _, queries, qrels = GenericDataLoader(DATA_PATH).load(split="test")
     queries, qrels = load_beir_lightweight(DATA_PATH)
     local_ids = load_local_doc_ids()
     if not local_ids: return
 
-    print("🔍 Filtering queries (SimpleWiki ∩ BeIR)...")
+    print("Filtering queries (SimpleWiki ∩ BeIR)...")
 
     valid_qrels = {}
     valid_queries = {}
@@ -155,49 +148,47 @@ def run_evaluation():
         new_target_map = {}
         for beir_doc_id, rel in target_map.items():
             # print(f"Try to match beir_doc_id: {beir_doc_id}")
-            # === 使用多重匹配逻辑 ===
             matched_id = try_match_id(beir_doc_id, local_ids)
 
             if matched_id:
                 new_target_map[matched_id] = rel
             else:
-                # DEBUG: 打印前 5 个没匹配上的，看看长啥样
                 if debug_miss_count < 5:
-                    print(f"⚠️ [MISS] BeIR ID: '{beir_doc_id}' vs Local Samples...")
+                    print(f"[MISS] BeIR ID: '{beir_doc_id}' vs Local Samples...")
                     debug_miss_count += 1
 
         if new_target_map:
             valid_qrels[qid] = new_target_map
             valid_queries[qid] = queries[qid]
 
-    print(f"✅ Retention: {len(valid_queries)} / {len(queries)} queries.")
+    print(f"Retention: {len(valid_queries)} / {len(queries)} queries.")
 
     if len(valid_queries) == 0:
-        print("❌ Still no intersection! Check the [MISS] logs above.")
+        print("Still no intersection! Check the [MISS] logs above.")
         return
 
-    print("🚀 Initializing Search Engine...")
+    print("Initializing Search Engine...")
     engine = SearchEngine()
 
-    print(f"📝 Running search on {len(valid_queries)} queries...")
+    print(f"Running search on {len(valid_queries)} queries...")
     run_results = {}
 
     for qid, query_text in tqdm(valid_queries.items(), desc="Searching"):
         search_res = engine.search(query_text, topk=100)
         run_results[qid] = [r['doc_id'] for r in search_res]
 
-    print("\n🧮 Calculating Metrics...")
+    print("\nCalculating Metrics...")
     final_metrics = calculate_metrics(run_results, valid_qrels)
 
     print("\n" + "=" * 40)
-    print(f"🏆 EVALUATION REPORT (SimpleWiki x BeIR)")
+    print(f"EVALUATION REPORT")
     print(f"Queries Evaluated: {len(valid_queries)}")
     print("=" * 40)
     for k in [1, 10, 100]:
         ndcg = np.mean(final_metrics[k]["ndcg"])
         recall = np.mean(final_metrics[k]["recall"])
-        print(f"👉 NDCG@{k:<3} : {ndcg:.4f}")
-        print(f"👉 Recall@{k:<3}: {recall:.4f}")
+        print(f" -> NDCG@{k:<3} : {ndcg:.4f}")
+        print(f" -> Recall@{k:<3}: {recall:.4f}")
         print("-" * 20)
     print("=" * 40)
 

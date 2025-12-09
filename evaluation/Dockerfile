@@ -9,5 +9,4 @@ RUN python -m nltk.downloader punkt stopwords
 
 ENV PYTHONPATH=/app
 
-# 4. 默认命令：保持容器存活
 CMD ["tail", "-f", "/dev/null"]

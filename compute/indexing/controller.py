@@ -4,7 +4,7 @@ import os
 import json
 import argparse
 
-# 配置
+
 REDIS_HOST = 'redis'
 REDIS_PORT = 6379
 DATA_DIR = "/app/data"
@@ -14,39 +14,39 @@ INPUT_FILE = os.path.join(DATA_DIR, "intermediate", "corpus.jsonl")
 def reset_redis(r):
     queues = [
         'queue:indexing:mapper',
-        'queue:indexing:mapper:processing', # 新增
+        'queue:indexing:mapper:processing',
         'queue:indexing:reducer',
-        'queue:indexing:reducer:processing' # 新增
+        'queue:indexing:reducer:processing'
     ]
     r.delete(*queues)
-    print("🧹 [Indexing Controller] All queues (pending & processing) cleared.")
+    print(" [Indexing Controller] All queues (pending & processing) cleared.")
 
 
 def publish_mapper_tasks(r, chunk_size=1000):
-    """
-    扫描文件，生成带有【字节偏移量】的任务
-    """
-    print(f"📦 Scanning {INPUT_FILE} to generate tasks...")
+
+    print(f"Scanning {INPUT_FILE} to generate tasks...")
     if not os.path.exists(INPUT_FILE):
-        print("❌ File not found.")
+        print("File not found.")
         return
 
     tasks = []
     task_id = 0
 
-    with open(INPUT_FILE, 'rb') as f:  # 二进制模式读取，保证偏移量准确
+    with open(INPUT_FILE, 'rb') as f:
         start_offset = 0
         lines_count = 0
 
         for line in f:
+            # print(f"Line!!!!!!! {line}")
             lines_count += 1
             if lines_count >= chunk_size:
+                print(f"Line count reaching chunk size {lines_count}")
                 end_offset = f.tell()
 
                 task = {
                     "task_id": task_id,
                     "start_offset": start_offset,
-                    "read_bytes": end_offset - start_offset  # 只需要读这么多字节
+                    "read_bytes": end_offset - start_offset
                 }
                 r.rpush('queue:indexing:mapper', json.dumps(task))
 
@@ -64,12 +64,12 @@ def publish_mapper_tasks(r, chunk_size=1000):
             r.rpush('queue:indexing:mapper', json.dumps(task))
             task_id += 1
 
-    print(f"🚀 Published {task_id} Mapper tasks to 'queue:indexing:mapper'")
+    print(f"Published {task_id} Mapper tasks to 'queue:indexing:mapper'")
 
 
 def publish_reducer_tasks(r, num_reducers):
     REAL_PARTITIONS = 16
-    print(f"⚙️  Publishing {REAL_PARTITIONS} Partition tasks...")
+    print(f"Publishing {REAL_PARTITIONS} Partition tasks...")
 
     for i in range(REAL_PARTITIONS):
         r.rpush('queue:indexing:reducer', str(i))

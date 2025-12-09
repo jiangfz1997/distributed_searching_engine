@@ -1,0 +1,82 @@
+[
+  {
+    "query": "isaac newton physics",
+    "relevant": {"Isaac_Newton": 3, "Physics": 2, "Gravity": 2, "Scientist": 1}
+  },
+  {
+    "query": "solar system planets",
+    "relevant": {"Solar_System": 3, "Sun": 2, "Earth": 2, "Mars": 2, "Jupiter": 2}
+  },
+  {
+    "query": "who wrote harry potter",
+    "relevant": {"J._K._Rowling": 3, "Harry_Potter": 2, "Writer": 1}
+  },
+  {
+    "query": "dna structure biology",
+    "relevant": {"DNA": 3, "Genetics": 2, "Biology": 1, "Cell": 1}
+  },
+  {
+    "query": "united kingdom countries",
+    "relevant": {"United_Kingdom": 3, "England": 2, "Scotland": 2, "Wales": 2, "Europe": 1}
+  },
+  {
+    "query": "moon landing apollo",
+    "relevant": {"Apollo_11": 3, "Moon": 2, "Neil_Armstrong": 2, "NASA": 1}
+  },
+  {
+    "query": "html web page",
+    "relevant": {"HTML": 3, "World_Wide_Web": 2, "Internet": 1, "Computer_programming": 1}
+  },
+  {
+    "query": "titanic ship sinking",
+    "relevant": {"Titanic": 3, "Ship": 1, "Atlantic_Ocean": 1}
+  },
+  {
+    "query": "leonardo da vinci art",
+    "relevant": {"Leonardo_da_Vinci": 3, "Mona_Lisa": 2, "The_Last_Supper": 2, "Italy": 1}
+  },
+  {
+    "query": "islam religion muslim",
+    "relevant": {"Islam": 3, "Muslim": 3, "Quran": 2, "Muhammad": 2}
+  },
+  {
+    "query": "oxygen element gas",
+    "relevant": {"Oxygen": 3, "Chemistry": 1, "Periodic_table": 1}
+  },
+  {
+    "query": "basketball sport rules",
+    "relevant": {"Basketball": 3, "Sport": 1, "NBA": 1}
+  },
+  {
+    "query": "human heart function",
+    "relevant": {"Heart": 3, "Blood": 2, "Circulatory_system": 2}
+  },
+  {
+    "query": "amazon rainforest location",
+    "relevant": {"Amazon_rainforest": 3, "Brazil": 1, "South_America": 1}
+  },
+  {
+    "query": "charles darwin evolution",
+    "relevant": {"Charles_Darwin": 3, "Evolution": 3, "Natural_selection": 2}
+  },
+  {
+    "query": "bitcoin cryptocurrency",
+    "relevant": {"Bitcoin": 3, "Money": 1, "Currency": 1}
+  },
+  {
+    "query": "barack obama president",
+    "relevant": {"Barack_Obama": 3, "United_States": 1, "President_of_the_United_States": 2}
+  },
+  {
+    "query": "piano musical instrument",
+    "relevant": {"Piano": 3, "Music": 1, "Ludwig_van_Beethoven": 1, "Wolfgang_Amadeus_Mozart": 1}
+  },
+  {
+    "query": "water cycle rain",
+    "relevant": {"Water_cycle": 3, "Rain": 2, "Water": 2, "Evaporation": 1}
+  },
+  {
+    "query": "nelson mandela south africa",
+    "relevant": {"Nelson_Mandela": 3, "South_Africa": 2, "Apartheid": 2}
+  }
+]

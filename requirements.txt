@@ -6,4 +6,3 @@ nltk
 numpy
 networkx
 scipy
-spacy
